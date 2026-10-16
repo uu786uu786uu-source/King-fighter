@@ -5,214 +5,154 @@ import android.os.Bundle;
 import android.graphics.*;
 import android.view.*;
 import android.content.Context;
-import android.os.Vibrator;
-import android.os.Build;
-import android.graphics.drawable.GradientDrawable;
+import android.widget.FrameLayout;
+import android.opengl.GLSurfaceView;
+import android.opengl.GLU;
+import javax.microedition.khronos.egl.EGLConfig;
+import javax.microedition.khronos.opengles.GL10;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.FloatBuffer;
 import java.util.Random;
 
 public class MainActivity extends Activity {
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
         getWindow().setFlags(1024,1024);
-        getWindow().getDecorView().setSystemUiVisibility(5894 | 1024 | 512 | 4096);
-        setContentView(new ArenaView(this));
+        getWindow().getDecorView().setSystemUiVisibility(5894|1024|512|4096);
+        FrameLayout root=new FrameLayout(this);
+        GameSurface game=new GameSurface(this);
+        root.addView(game);
+        root.addView(new HUD(this,game),new FrameLayout.LayoutParams(-1,-1));
+        setContentView(root);
     }
-
-    static class ArenaView extends View {
-        final Paint p=new Paint(3);
-        final Random random=new Random(9);
-        final int GOLD=Color.rgb(255,194,70), CYAN=Color.rgb(53,226,255), RED=Color.rgb(255,64,100), WHITE=Color.WHITE;
-        int screen=0, mode=0, hero=0, enemy=1, hp=100, ehp=100, energy=0, score=0, wins=0, combo=0;
-        int playerX=0, enemyX=0, round=1, timeLeft=99;
-        boolean initialized=false, sound=true, paused=false, hitFlash=false;
-        long lastAction=0, lastTick=System.currentTimeMillis();
-        float pulse=0, bgShift=0;
-        String toast="", difficulty="NORMAL";
-        long toastAt=0;
-        final String[] heroes={"VOLT","SHADOW","TITAN"};
-        final int[] heroColors={0xff27d9ff,0xffb15cff,0xffffa63d};
-        final String[] styles={"SPEED FIGHTER","NIGHT ASSASSIN","POWER TANK"};
-        ArenaView(Context c){super(c);setLayerType(View.LAYER_TYPE_SOFTWARE,null);}
-        void color(int c){p.setColor(c);p.setShader(null);p.setStyle(Paint.Style.FILL);p.setShadowLayer(0,0,0,Color.TRANSPARENT);}
-        void rect(Canvas c,float l,float t,float r,float b,int col){color(col);c.drawRect(l,t,r,b,p);}
-        void round(Canvas c,float l,float t,float r,float b,float rad,int col){color(col);c.drawRoundRect(l,t,r,b,rad,rad,p);}
-        void line(Canvas c,float x1,float y1,float x2,float y2,float width,int col){color(col);p.setStrokeWidth(width);p.setStrokeCap(Paint.Cap.ROUND);c.drawLine(x1,y1,x2,y2,p);p.setStrokeWidth(1);}
-        void txt(Canvas c,String s,float x,float y,float size,int col,boolean bold){
-            color(col);p.setTextSize(size);p.setTypeface(Typeface.create("sans-serif-condensed",bold?Typeface.BOLD:Typeface.NORMAL));c.drawText(s,x,y,p);
+    static class GameSurface extends GLSurfaceView {
+        final World world;
+        GameSurface(Context c){super(c);setEGLContextClientVersion(1);world=new World();setRenderer(world);setRenderMode(GLSurfaceView.RENDERMODE_CONTINUOUSLY);}
+        void act(String a){world.action(a);}
+    }
+    static class World implements GLSurfaceView.Renderer {
+        volatile int hero=0, weapon=0, hp=100, ehp=100, score=0, combo=0;
+        volatile boolean started=false, paused=false, blocking=false;
+        volatile float playerX=-1.15f, enemyX=1.15f, playerZ=0, enemyZ=0;
+        volatile long attackUntil=0,lastEnemy=0,lastCombo=0;
+        volatile String message="TAP START TO FIGHT";
+        final int[] colors={0xff18d9ff,0xffbd67ff,0xffffa33a,0xff65f28b};
+        final String[] names={"VOLT","SHADOW","TITAN","PHANTOM"};
+        final String[] weapons={"BARE HANDS","ENERGY BLADE","HAMMER","DUAL DAGGERS"};
+        final Random random=new Random();
+        long startAt=System.currentTimeMillis();
+        public void onSurfaceCreated(GL10 gl,EGLConfig config){
+            gl.glClearColor(0.015f,0.025f,0.07f,1);gl.glEnable(GL10.GL_DEPTH_TEST);gl.glEnable(GL10.GL_CULL_FACE);gl.glShadeModel(GL10.GL_SMOOTH);
+            gl.glEnable(GL10.GL_LIGHTING);gl.glEnable(GL10.GL_LIGHT0);
+            float[] pos={-3,5,6,1};float[] amb={0.35f,0.35f,0.48f,1};float[] dif={0.85f,0.9f,1,1};
+            gl.glLightfv(GL10.GL_LIGHT0,GL10.GL_POSITION,pos,0);gl.glLightfv(GL10.GL_LIGHT0,GL10.GL_AMBIENT,amb,0);gl.glLightfv(GL10.GL_LIGHT0,GL10.GL_DIFFUSE,dif,0);
         }
-        void centered(Canvas c,String s,float x,float y,float size,int col,boolean bold){color(col);p.setTextSize(size);p.setTypeface(Typeface.create("sans-serif-condensed",bold?Typeface.BOLD:Typeface.NORMAL));c.drawText(s,x-p.measureText(s)/2,y,p);}
-        void glowText(Canvas c,String s,float x,float y,float size,int col){color(col);p.setTextSize(size);p.setTypeface(Typeface.create("sans-serif-condensed",Typeface.BOLD));p.setShadowLayer(18,0,0,col);c.drawText(s,x,y,p);p.clearShadowLayer();}
-        void panel(Canvas c,float l,float t,float r,float b){
-            color(0xdd10192b);p.setStyle(Paint.Style.FILL);c.drawRoundRect(l,t,r,b,20,20,p);
-            color(0xff31465f);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(1.5f);c.drawRoundRect(l,t,r,b,20,20,p);p.setStyle(Paint.Style.FILL);
+        public void onSurfaceChanged(GL10 gl,int w,int h){gl.glViewport(0,0,w,h);gl.glMatrixMode(GL10.GL_PROJECTION);gl.glLoadIdentity();GLU.gluPerspective(gl,52f,(float)w/Math.max(1,h),0.1f,80f);gl.glMatrixMode(GL10.GL_MODELVIEW);}
+        public void onDrawFrame(GL10 gl){
+            gl.glClear(GL10.GL_COLOR_BUFFER_BIT|GL10.GL_DEPTH_BUFFER_BIT);
+            gl.glMatrixMode(GL10.GL_MODELVIEW);gl.glLoadIdentity();GLU.gluLookAt(gl,0,3.1f,8.2f,0,1.1f,0,0,1,0);
+            drawArena(gl);
+            long now=System.currentTimeMillis();
+            if(started&&!paused&&hp>0&&ehp>0){
+                if(now-lastEnemy>1650){lastEnemy=now;if(Math.abs(playerX-enemyX)<2.65f&&!blocking){hp=Math.max(0,hp-(hero==2?5:8));message="RIVAL COUNTERATTACK!";}else if(Math.abs(playerX-enemyX)>=2.65f){enemyX+=enemyX>playerX?-.12f:.12f;}}
+                if(now>attackUntil&&Math.abs(playerX-enemyX)>2.65f)enemyX+=enemyX>playerX?-.012f:.012f;
+                playerX=Math.max(-3.1f,Math.min(0.65f,playerX));enemyX=Math.max(-0.65f,Math.min(3.1f,enemyX));
+            }
+            drawFighter(gl,playerX,playerZ,colors[hero],true,now<attackUntil,hero,weapon,now);
+            drawFighter(gl,enemyX,enemyZ,colors[(hero+1)%colors.length],false,now-lastEnemy<260,(hero+1)%4,(weapon+1)%4,now);
+            if(started&&hp<=0)message="DEFEAT — TAP REMATCH";
+            if(started&&ehp<=0)message="VICTORY! — TAP REMATCH";
         }
-        void button(Canvas c,float l,float t,float r,float b,String label,int accent,boolean active){
-            round(c,l+3,t+5,r+3,b+5,15,0x99000000);
-            round(c,l,t,r,b,15,active?accent:0xff1b2940);
-            color(active?0xfffff0c9:0xff425875);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(1.5f);c.drawRoundRect(l,t,r,b,15,15,p);p.setStyle(Paint.Style.FILL);
-            centered(c,label,(l+r)/2,(t+b)/2+7,Math.min(21,(r-l)/Math.max(4,label.length())*1.45f),WHITE,true);
+        void drawArena(GL10 gl){
+            gl.glDisable(GL10.GL_LIGHTING);
+            gl.glPushMatrix();gl.glTranslatef(0,-0.1f,0);
+            gl.glColor4f(.035f,.07f,.13f,1);cube(gl,9,.12f,5);
+            gl.glColor4f(.04f,.28f,.38f,1);
+            gl.glLineWidth(1.5f);gl.glBegin(GL10.GL_LINES);
+            for(int i=-8;i<=8;i++){gl.glVertex3f(i*.5f,.07f,-2.5f);gl.glVertex3f(i*.5f,.07f,2.5f);}
+            for(int i=-5;i<=5;i++){gl.glVertex3f(-4,.07f,i*.5f);gl.glVertex3f(4,.07f,i*.5f);}
+            gl.glEnd();gl.glPopMatrix();
+            for(int i=0;i<8;i++){gl.glPushMatrix();gl.glTranslatef(-4.4f+i*1.25f,1.1f,-3.4f);gl.glColor4f(i%2==0?.04f:.12f,.10f,.22f,1);cube(gl,.25f,2.2f,.28f);gl.glPopMatrix();}
+            gl.glEnable(GL10.GL_LIGHTING);
         }
+        void mat(GL10 gl,int color){float r=((color>>16)&255)/255f,g=((color>>8)&255)/255f,b=(color&255)/255f;float[] d={r,g,b,1},s={.55f,.55f,.65f,1};gl.glMaterialfv(GL10.GL_FRONT_AND_BACK,GL10.GL_AMBIENT_AND_DIFFUSE,d,0);gl.glMaterialfv(GL10.GL_FRONT_AND_BACK,GL10.GL_SPECULAR,s,0);gl.glMaterialf(GL10.GL_FRONT_AND_BACK,GL10.GL_SHININESS,48);}
+        void drawFighter(GL10 gl,float x,float z,int col,boolean player,boolean attack,int type,int wp,long now){
+            float bob=(float)Math.sin(now/170.0+(player?0:1))*.035f;
+            gl.glPushMatrix();gl.glTranslatef(x,bob,z);gl.glRotatef(player?18:-18,0,1,0);
+            int dark=0xff172237,accent=col;
+            // legs and armored boots
+            gl.glPushMatrix();gl.glTranslatef(-.19f,.38f,0);gl.glRotatef((attack? -24: (float)Math.sin(now/240.0)*4),1,0,0);mat(gl,dark);cube(gl,.18f,.62f,.22f);gl.glTranslatef(0,-.29f,.09f);mat(gl,accent);cube(gl,.23f,.12f,.34f);gl.glPopMatrix();
+            gl.glPushMatrix();gl.glTranslatef(.19f,.38f,0);gl.glRotatef(attack?18:(float)Math.sin(now/240.0)*4,1,0,0);mat(gl,dark);cube(gl,.18f,.62f,.22f);gl.glTranslatef(0,-.29f,.09f);mat(gl,accent);cube(gl,.23f,.12f,.34f);gl.glPopMatrix();
+            gl.glPushMatrix();gl.glTranslatef(0,1.05f,0);mat(gl,accent);cube(gl,.58f,.68f,.34f);gl.glTranslatef(0,.02f,.19f);mat(gl,0xffd5eaff);cube(gl,.26f,.09f,.025f);gl.glPopMatrix();
+            gl.glPushMatrix();gl.glTranslatef(0,1.58f,0);mat(gl,0xffd6a783);sphere(gl,.22f,.22f,.22f);gl.glTranslatef(0,.10f,0);mat(gl,dark);cube(gl,.42f,.13f,.4f);gl.glPopMatrix();
+            // arms and fists
+            for(int side=-1;side<=1;side+=2){gl.glPushMatrix();gl.glTranslatef(side*.39f,1.24f,0);gl.glRotatef(attack&&side==(player?1:-1)?-58:(float)Math.sin(now/220.0+side)*10,1,0,0);gl.glRotatef(side*12,0,0,1);mat(gl,accent);cube(gl,.17f,.48f,.20f);gl.glTranslatef(0,-.28f,.05f);mat(gl,0xffd7e3f1);sphere(gl,.13f,.13f,.13f);
+                if(player&&wp>0&&side==1){gl.glTranslatef(.08f,-.04f,.1f);mat(gl,wp==1?0xff45efff:wp==2?0xffffb13b:0xffc1a7ff);cube(gl,wp==2?.16f:.06f,wp==2?.58f:.65f,wp==2?.13f:.08f);}
+                gl.glPopMatrix();}
+            gl.glPopMatrix();
+        }
+        void cube(GL10 gl,float x,float y,float z){
+            float[] v={-1,-1,1,1,-1,1,1,1,1,-1,1,1, 1,-1,-1,-1,-1,-1,-1,1,-1,1,1,-1, -1,-1,-1,-1,-1,1,-1,1,1,-1,1,-1, 1,-1,1,1,-1,-1,1,1,-1,1,1,1, -1,1,1,1,1,1,1,1,-1,-1,1,-1, -1,-1,-1,1,-1,-1,1,-1,1,-1,-1,1};
+            FloatBuffer buf=ByteBuffer.allocateDirect(v.length*4).order(ByteOrder.nativeOrder()).asFloatBuffer();buf.put(v).position(0);
+            gl.glPushMatrix();gl.glScalef(x/2,y/2,z/2);gl.glEnableClientState(GL10.GL_VERTEX_ARRAY);gl.glVertexPointer(3,GL10.GL_FLOAT,0,buf);gl.glDrawArrays(GL10.GL_QUADS,0,24);gl.glDisableClientState(GL10.GL_VERTEX_ARRAY);gl.glPopMatrix();
+        }
+        void sphere(GL10 gl,float x,float y,float z){cube(gl,x,y,z);}
+        synchronized void action(String a){
+            if(a.equals("START")||a.equals("REMATCH")){started=true;paused=false;hp=100;ehp=100;score=0;combo=0;playerX=-1.15f;enemyX=1.15f;lastEnemy=System.currentTimeMillis();message="FIGHT!";return;}
+            if(a.equals("PAUSE")){paused=!paused;message=paused?"PAUSED":"FIGHT!";return;}
+            if(a.equals("HERO")){hero=(hero+1)%4;message="FIGHTER: "+names[hero];return;}
+            if(a.equals("WEAPON")){weapon=(weapon+1)%4;message=weapons[weapon];return;}
+            if(!started||paused||hp<=0||ehp<=0)return;
+            if(a.equals("LEFT")){playerX-=.22f;message="MOVE LEFT";}
+            else if(a.equals("RIGHT")){playerX+=.22f;message="MOVE RIGHT";}
+            else if(a.equals("BLOCK")){blocking=true;new Thread(()->{try{Thread.sleep(500);}catch(Exception ignored){}blocking=false;}).start();message="BLOCK!";}
+            else if(a.equals("PUNCH")||a.equals("KICK")||a.equals("SPECIAL")){
+                long now=System.currentTimeMillis();if(now-attackUntil<170)return;attackUntil=now+(a.equals("SPECIAL")?650:330);
+                if(Math.abs(playerX-enemyX)<2.85f){int d=a.equals("PUNCH")?10:a.equals("KICK")?17:hero==2?36:27;ehp=Math.max(0,ehp-d);score+=d*10;combo++;message=a.equals("SPECIAL")?"ULTIMATE STRIKE!":a.equals("KICK")?"HEAVY KICK!":"PUNCH COMBO!";}
+                else message="MOVE CLOSER!";
+            }else if(a.equals("JUMP")){playerZ=-.55f;message="JUMP!";new Thread(()->{try{Thread.sleep(350);}catch(Exception ignored){}playerZ=0;}).start();}
+        }
+    }
+    static class HUD extends View {
+        final GameSurface game;final Paint p=new Paint(3);
+        HUD(Context c,GameSurface g){super(c);game=g;setLayerType(View.LAYER_TYPE_SOFTWARE,null);}
+        void fill(Canvas c,int col){p.setColor(col);p.setStyle(Paint.Style.FILL);p.setShader(null);}
+        void box(Canvas c,float l,float t,float r,float b,int col){fill(c,col);c.drawRoundRect(l,t,r,b,16,16,p);}
+        void label(Canvas c,String s,float x,float y,float size,int col,boolean bold){fill(c,col);p.setTextSize(size);p.setTypeface(Typeface.create("sans-serif-condensed",bold?1:0));c.drawText(s,x,y,p);}
+        void center(Canvas c,String s,float x,float y,float size,int col){fill(c,col);p.setTextSize(size);p.setTypeface(Typeface.DEFAULT_BOLD);c.drawText(s,x-p.measureText(s)/2,y,p);}
         @Override protected void onDraw(Canvas c){
-            super.onDraw(c);int w=getWidth(),h=getHeight();if(w<1||h<1)return;
-            if(!initialized){playerX=(int)(w*.28f);enemyX=(int)(w*.72f);initialized=true;}
-            float dt=Math.min(0.05f,(System.currentTimeMillis()-lastTick)/1000f);lastTick=System.currentTimeMillis();pulse+=dt*2.2f;bgShift+=dt*8;
-            drawBackground(c,w,h);
-            if(screen==0)drawMenu(c,w,h);
-            else if(screen==1)drawSelect(c,w,h);
-            else if(screen==2)drawFight(c,w,h);
-            else if(screen==3)drawSettings(c,w,h);
-            else if(screen==4)drawResult(c,w,h);
-            if(!toast.isEmpty()&&System.currentTimeMillis()-toastAt<1800){round(c,w*.33f,h*.08f,w*.67f,h*.16f,18,0xee111a2b);centered(c,toast,w/2f,h*.13f,19,GOLD,true);}
-            postInvalidateDelayed(33);
-        }
-        void drawBackground(Canvas c,int w,int h){
-            p.setShader(new LinearGradient(0,0,w,h,0xff07101f,0xff32152d,Shader.TileMode.CLAMP));c.drawRect(0,0,w,h,p);p.setShader(null);
-            color(0x3327cfff);c.drawCircle(w*.78f,h*.22f,h*.18f,p);
-            color(0x22ff3e7d);c.drawCircle(w*.18f,h*.28f,h*.20f,p);
-            // neon skyline
-            for(int i=0;i<14;i++){float bw=w/14f+4;float bh=h*(.15f+((i*37)%31)/100f);float x=i*bw;rect(c,x,h*.70f-bh,x+bw-3,h*.70f,0xff111a30);for(int j=0;j<3;j++)for(int k=0;k<2;k++)if((i+j+k)%3!=0)rect(c,x+5+k*9,h*.70f-bh+8+j*13,x+9+k*9,h*.70f-bh+13+j*13,0x8860b9d9);}
-            rect(c,0,h*.70f,w,h,0xff111624);rect(c,0,h*.70f,w,h*.715f,0xff506178);
-            for(int i=0;i<9;i++){float x=(i*w/8f+(bgShift%w));while(x>w)x-=w;line(c,x,h*.72f,x-35,h,1,0x3348a9ca);}
-            line(c,0,h*.88f,w,h*.88f,1,0x55ffbf55);
-        }
-        void drawLogo(Canvas c,int w,int h,float y){
-            centered(c,"KING",w/2f,y,Math.min(72,w*.12f),WHITE,true);
-            centered(c,"F I G H T E R",w/2f,y+Math.min(36,h*.065f),Math.min(25,w*.045f),GOLD,true);
-            round(c,w*.38f,y+Math.min(46,h*.085f),w*.62f,y+Math.min(49,h*.09f),2,CYAN);
-        }
-        void drawMenu(Canvas c,int w,int h){
-            drawLogo(c,w,h,h*.16f);
-            centered(c,"RISE. FIGHT. RULE THE ARENA.",w/2f,h*.39f,Math.min(22,w*.035f),0xffb8c9df,true);
-            float bw=Math.min(300,w*.42f), bh=Math.min(55,h*.105f), x=(w-bw)/2;
-            button(c,x,h*.48f,x+bw,h*.48f+bh,"PLAY NOW",0xff087dba,true);
-            button(c,x,h*.48f+bh+13,x+bw,h*.48f+bh*2+13,"TRAINING MODE",0xff60418d,false);
-            button(c,x,h*.48f+bh*2+26,x+bw,h*.48f+bh*3+26,"SETTINGS",0xff263c59,false);
-            centered(c,"3 FIGHTERS  •  COMBOS  •  ARCADE BATTLES",w/2f,h*.91f,Math.min(16,w*.025f),0xff9aaec8,false);
-            centered(c,"v1.1  |  OFFLINE FIGHTING",w/2f,h*.96f,12,0xff61758e,false);
-            drawEmblem(c,w*.16f,h*.55f,Math.min(42,h*.08f),CYAN,true);drawEmblem(c,w*.84f,h*.55f,Math.min(42,h*.08f),RED,false);
-        }
-        void drawEmblem(Canvas c,float x,float y,float r,int col,boolean left){
-            color(col);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(3);Path path=new Path();path.moveTo(x,y-r);path.lineTo(x+r*.8f,y-r*.45f);path.lineTo(x+r*.65f,y+r*.55f);path.lineTo(x,y+r);path.lineTo(x-r*.65f,y+r*.55f);path.lineTo(x-r*.8f,y-r*.45f);path.close();c.drawPath(path,p);p.setStyle(Paint.Style.FILL);
-            line(c,x-r*.35f,y-r*.12f,x+r*.35f,y-r*.12f,3,col);line(c,x-r*.28f,y+r*.2f,x+r*.28f,y+r*.2f,3,col);
-        }
-        void drawSelect(Canvas c,int w,int h){
-            centered(c,"CHOOSE YOUR FIGHTER",w/2f,h*.13f,Math.min(34,w*.055f),WHITE,true);
-            centered(c,"Every warrior has a different fighting style",w/2f,h*.19f,17,0xffb5c6dd,false);
-            float gap=w*.025f, cw=Math.min(w*.27f,250), total=cw*3+gap*2, start=(w-total)/2;
-            for(int i=0;i<3;i++){
-                float x=start+i*(cw+gap);panel(c,x,h*.25f,x+cw,h*.76f);
-                int col=heroColors[i];if(hero==i){color(col);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(3);c.drawRoundRect(x,h*.25f,x+cw,h*.76f,20,20,p);p.setStyle(Paint.Style.FILL);}
-                drawEmblem(c,x+cw/2,h*.41f,Math.min(35,cw*.15f),col,true);
-                centered(c,heroes[i],x+cw/2,h*.54f,Math.min(30,cw*.15f),WHITE,true);
-                centered(c,styles[i],x+cw/2,h*.59f,Math.min(14,cw*.075f),col,true);
-                centered(c,i==0?"SPEED  ★★★★★":i==1?"SKILL  ★★★★★":"POWER  ★★★★★",x+cw/2,h*.65f,Math.min(15,cw*.08f),0xffd4deee,false);
-                button(c,x+cw*.14f,h*.68f,x+cw*.86f,h*.68f+36,i==hero?"SELECTED":"CHOOSE",col,i==hero);
+            int w=getWidth(),h=getHeight();World a=game.world;
+            box(c,w*.025f,h*.035f,w*.36f,h*.105f,0xcc091526);label(c,a.names[a.hero],w*.045f,h*.075f,Math.min(23,w*.03f),Color.WHITE,true);box(c,w*.045f,h*.085f,w*.345f,h*.10f,0xff283449);box(c,w*.045f,h*.085f,w*(.045f+.30f*a.hp/100f),h*.10f,a.colors[a.hero]);
+            box(c,w*.64f,h*.035f,w*.975f,h*.105f,0xcc091526);label(c,"RIVAL",w*.66f,h*.075f,Math.min(23,w*.03f),Color.WHITE,true);box(c,w*.66f,h*.085f,w*.955f,h*.10f,0xff283449);box(c,w*.66f,h*.085f,w*(.66f+.295f*a.ehp/100f),h*.10f,0xffff4b72);
+            center(c,"SCORE  "+a.score,w*.50f,h*.075f,Math.min(20,w*.026f),0xffffd36b);
+            box(c,w*.30f,h*.13f,w*.70f,h*.19f,0xd90a1527);center(c,a.message,w*.50f,h*.168f,Math.min(23,w*.033f),Color.WHITE);
+            if(!a.started||a.hp<=0||a.ehp<=0){
+                box(c,w*.33f,h*.34f,w*.67f,h*.47f,0xe60a1527);center(c,"KING FIGHTER 3D",w*.50f,h*.385f,Math.min(30,w*.045f),0xff4beaff);center(c,a.started?(a.ehp<=0?"VICTORY!":"DEFEAT"):"3D ARENA COMBAT",w*.50f,h*.425f,Math.min(21,w*.03f),Color.WHITE);
+                button(c,w*.39f,h*.49f,w*.61f,h*.58f,a.started?"REMATCH":"START FIGHT",0xff087fb8);button(c,w*.39f,h*.60f,w*.61f,h*.68f,"CHANGE FIGHTER",0xff60418d);
+            }else{
+                button(c,w*.02f,h*.80f,w*.12f,h*.92f,"◀",0xff174b73);button(c,w*.135f,h*.80f,w*.235f,h*.92f,"▶",0xff174b73);
+                button(c,w*.31f,h*.80f,w*.43f,h*.92f,"PUNCH",0xffa32d53);button(c,w*.445f,h*.80f,w*.565f,h*.92f,"KICK",0xffa85c1c);
+                button(c,w*.58f,h*.80f,w*.73f,h*.92f,"SPECIAL",0xff65409c);button(c,w*.745f,h*.80f,w*.845f,h*.92f,"BLOCK",0xff18746d);button(c,w*.86f,h*.80f,w*.96f,h*.92f,"JUMP",0xff31527b);
+                button(c,w*.90f,h*.03f,w*.975f,h*.12f,"Ⅱ",0xff26384f);button(c,w*.025f,h*.15f,w*.22f,h*.22f,"FIGHTER",0xff26384f);button(c,w*.025f,h*.235f,w*.22f,h*.305f,"WEAPON",0xff26384f);
+                if(a.paused){box(c,w*.34f,h*.35f,w*.66f,h*.62f,0xee091526);center(c,"PAUSED",w*.5f,h*.43f,32,Color.WHITE);button(c,w*.40f,h*.48f,w*.60f,h*.56f,"RESUME",0xff087fb8);}
             }
-            button(c,w*.08f,h*.84f,w*.28f,h*.84f+48,"BACK",0xff263c59,false);
-            button(c,w*.36f,h*.84f,w*.64f,h*.84f+48,"ENTER ARENA",0xff087dba,true);
-            button(c,w*.72f,h*.84f,w*.92f,h*.84f+48,"NEXT FIGHTER",0xff60418d,false);
+            postInvalidateDelayed(80);
         }
-        void fighter(Canvas c,int x,int floor,int col,boolean facingRight,int index,boolean attack){
-            float sc=Math.max(.7f,Math.min(1.25f,getHeight()/480f));int head=(int)(21*sc), body=(int)(52*sc);
-            color(0x77000000);c.drawOval(x-32*sc,floor-4,x+32*sc,floor+9,p);
-            // glowing aura
-            color(col&0x33ffffff);c.drawCircle(x,floor-75*sc,45*sc,p);
-            color(col);c.drawCircle(x,floor-body-head,head,p);
-            // headband
-            rect(c,x-20*sc,floor-body-head-4*sc,x+20*sc,floor-body-head+2*sc,0xfff4f7ff);
-            line(c,x+ (facingRight?8:-8)*sc,floor-body-head,x+(facingRight?16:-16)*sc,floor-body-head+2*sc,2,0xff101626);
-            // torso
-            color(col);Path torso=new Path();torso.moveTo(x-23*sc,floor-body);torso.lineTo(x-17*sc,floor-body-16*sc);torso.lineTo(x+17*sc,floor-body-16*sc);torso.lineTo(x+23*sc,floor-body);torso.close();c.drawPath(torso,p);
-            line(c,x-12*sc,floor-body+2*sc,x-28*sc,floor-20*sc,12*sc,col);
-            line(c,x+12*sc,floor-body+2*sc,x+28*sc,floor-20*sc,12*sc,col);
-            float armX=x+(facingRight?43:-43)*sc;
-            if(attack){line(c,x+(facingRight?12:-12)*sc,floor-body+2*sc,x+(facingRight?78:-78)*sc,floor-body+1*sc,13*sc,col);color(GOLD);p.setShadowLayer(16,0,0,GOLD);c.drawCircle(x+(facingRight?82:-82)*sc,floor-body,12*sc,p);p.clearShadowLayer();}
-            line(c,x-10*sc,floor-19*sc,x-25*sc,floor,13*sc,col);line(c,x+10*sc,floor-19*sc,x+25*sc,floor,13*sc,col);
-            line(c,x-28*sc,floor-3*sc,x-12*sc,floor-3*sc,8*sc,0xffdceaff);line(c,x+15*sc,floor-3*sc,x+31*sc,floor-3*sc,8*sc,0xffdceaff);
-        }
-        void drawFight(Canvas c,int w,int h){
-            if(!paused&&!isOver()){
-                long now=System.currentTimeMillis();
-                if(now-lastAction>6500){timeLeft=Math.max(0,timeLeft-1);lastAction=now;if(timeLeft==0){screen=4;}}
-            }
-            txt(c,"ROUND "+round, w*.45f,h*.07f,18,GOLD,true);
-            txt(c,"P"+(hero+1)+"  "+heroes[hero],w*.04f,h*.07f,16,WHITE,true);
-            txt(c,"RIVAL  "+heroes[enemy],w*.77f,h*.07f,16,WHITE,true);
-            bar(c,w*.04f,h*.10f,w*.36f,17,hp,heroColors[hero]);
-            bar(c,w*.60f,h*.10f,w*.36f,17,ehp,RED);
-            centered(c,""+timeLeft,w/2f,h*.13f,20,WHITE,true);
-            fighter(c,playerX,(int)(h*.72f),heroColors[hero],true,hero,System.currentTimeMillis()-lastAction<250&&combo>0);
-            fighter(c,enemyX,(int)(h*.72f),heroColors[enemy],false,enemy,false);
-            if(combo>1)glowText(c,combo+" HIT COMBO!",w*.42f,h*.34f,27,GOLD);
-            // controls
-            float by=h*.80f,bh=h*.13f;
-            button(c,w*.035f,by,w*.17f,by+bh,"MOVE",0xff1b507a,false);
-            button(c,w*.205f,by,w*.36f,by+bh,"PUNCH",0xffa12e51,true);
-            button(c,w*.375f,by,w*.53f,by+bh,"KICK",0xffa35b1c,true);
-            button(c,w*.70f,by,w*.86f,by+bh,"SPECIAL",0xff62419b,true);
-            button(c,w*.88f,by,w*.97f,by+bh,"Ⅱ",0xff263c59,false);
-            if(paused){rect(c,0,0,w,h,0xbb050a15);panel(c,w*.30f,h*.27f,w*.70f,h*.73f);centered(c,"PAUSED",w/2f,h*.38f,36,WHITE,true);button(c,w*.37f,h*.44f,w*.63f,h*.44f+45,"RESUME",0xff087dba,true);button(c,w*.37f,h*.55f,w*.63f,h*.55f+45,"MAIN MENU",0xff263c59,false);}
-        }
-        void bar(Canvas c,float x,float y,float ww,float hh,int val,int col){round(c,x,y,x+ww,y+hh,hh/2,0xff27344a);round(c,x,y,x+ww*Math.max(0,val)/100f,y+hh,hh/2,col);round(c,x,y,x+ww*Math.max(0,val)/100f,y+3,2,0x66ffffff);}
-        boolean isOver(){return hp<=0||ehp<=0;}
-        void drawResult(Canvas c,int w,int h){
-            boolean won=ehp<=0;
-            drawEmblem(c,w/2f,h*.28f,55,won?GOLD:RED,true);
-            centered(c,won?"VICTORY!":"DEFEAT",w/2f,h*.45f,Math.min(58,w*.09f),won?GOLD:RED,true);
-            centered(c,won?"THE ARENA IS YOURS":"GET BACK UP, FIGHTER",w/2f,h*.52f,20,WHITE,true);
-            centered(c,"SCORE  "+score+"     COMBO  x"+Math.max(combo,1),w/2f,h*.60f,21,0xffc5d5e9,false);
-            button(c,w*.28f,h*.70f,w*.48f,h*.70f+52,"REMATCH",0xff087dba,true);
-            button(c,w*.52f,h*.70f,w*.75f,h*.70f+52,"MAIN MENU",0xff263c59,false);
-        }
-        void drawSettings(Canvas c,int w,int h){
-            centered(c,"GAME SETTINGS",w/2f,h*.18f,Math.min(38,w*.06f),WHITE,true);
-            panel(c,w*.20f,h*.28f,w*.80f,h*.72f);
-            txt(c,"SOUND",w*.27f,h*.40f,23,WHITE,true);button(c,w*.60f,h*.34f,w*.75f,h*.34f+44,sound?"ON":"OFF",0xff087dba,sound);
-            txt(c,"DIFFICULTY",w*.27f,h*.52f,23,WHITE,true);button(c,w*.60f,h*.46f,w*.75f,h*.46f+44,difficulty,0xff60418d,true);
-            centered(c,"Built for offline arcade fun",w/2f,h*.63f,16,0xffaebfd5,false);
-            button(c,w*.36f,h*.79f,w*.64f,h*.79f+48,"BACK TO MENU",0xff263c59,false);
-        }
-        void startFight(){screen=2;paused=false;hp=100;ehp=100;energy=0;combo=0;timeLeft=99;score=0;playerX=(int)(getWidth()*.28f);enemyX=(int)(getWidth()*.72f);lastAction=System.currentTimeMillis();}
-        void notice(String s){toast=s;toastAt=System.currentTimeMillis();}
-        void vibrate(){try{Vibrator v=(Vibrator)getContext().getSystemService(Context.VIBRATOR_SERVICE);if(v!=null&&Build.VERSION.SDK_INT>=26)v.vibrate(android.os.VibrationEffect.createOneShot(22,70));}catch(Exception ignored){}}
+        void button(Canvas c,float l,float t,float r,float b,String s,int col){box(c,l,t+4,r,b+4,0x99000000);box(c,l,t,r,b,col);fill(c,0xffd8f6ff);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(1.4f);c.drawRoundRect(l,t,r,b,14,14,p);p.setStyle(Paint.Style.FILL);center(c,s,(l+r)/2,(t+b)/2+6,Math.min(19,(r-l)/Math.max(4,s.length())*1.45f),Color.WHITE);}
         @Override public boolean onTouchEvent(android.view.MotionEvent e){
-            if(e.getAction()!=MotionEvent.ACTION_DOWN)return true;
-            float x=e.getX(),y=e.getY(),w=getWidth(),h=getHeight();
-            if(screen==0){
-                if(y>h*.45f&&y<h*.48f+Math.min(55,h*.105f)){screen=1;}
-                else if(y>h*.48f&&y<h*.48f+Math.min(55,h*.105f)+75){mode=1;screen=1;notice("TRAINING MODE");}
-                else if(y>h*.48f+Math.min(55,h*.105f)+70){screen=3;}
-            }else if(screen==1){
-                float cw=Math.min(w*.27f,250),gap=w*.025f,total=cw*3+gap*2,start=(w-total)/2;
-                for(int i=0;i<3;i++){float left=start+i*(cw+gap);if(x>=left&&x<=left+cw&&y>h*.24f&&y<h*.78f){hero=i;return true;}}
-                if(y>h*.82f&&x<w*.32f)screen=0;
-                else if(y>h*.82f&&x>w*.33f&&x<w*.68f){enemy=(hero+1+random.nextInt(2))%3;startFight();}
-                else if(y>h*.82f&&x>w*.70f)hero=(hero+1)%3;
-            }else if(screen==2){
-                if(paused){if(y>h*.42f&&y<h*.53f)paused=false;else if(y>h*.53f){screen=0;paused=false;} }
-                else if(y>h*.78f){
-                    if(x>w*.87f){paused=true;return true;}
-                    if(x<w*.19f){playerX=Math.min(enemyX-75,playerX+Math.max(24,(int)(w*.07f)));notice("MOVE!");}
-                    else if(x<w*.37f){attack(12,"PUNCH!");}
-                    else if(x<w*.56f){attack(18,"POWER KICK!");}
-                    else if(x>w*.65f){attack(28,"SPECIAL ATTACK!");energy=0;}
-                }else if(x<w*.45f){playerX=Math.min(enemyX-70,playerX+25);}
-                else {playerX=Math.min(enemyX-65,playerX+10);}
-                if(ehp<=0||hp<=0){screen=4;if(ehp<=0)wins++;}
-            }else if(screen==3){
-                if(y>h*.33f&&y<h*.44f)sound=!sound;
-                else if(y>h*.45f&&y<h*.56f)difficulty=difficulty.equals("NORMAL")?"HARD":difficulty.equals("HARD")?"EASY":"NORMAL";
-                else screen=0;
-            }else if(screen==4){
-                if(y>h*.66f&&x<w*.50f)startFight();else if(y>h*.66f)screen=0;
-            }
-            vibrate();invalidate();return true;
-        }
-        void attack(int damage,String label){
-            if(Math.abs(enemyX-playerX)>getWidth()*.43f){notice("TOO FAR — MOVE CLOSER");playerX=Math.min(enemyX-90,playerX+25);return;}
-            ehp=Math.max(0,ehp-damage);combo++;score+=damage*10;energy=Math.min(100,energy+damage);lastAction=System.currentTimeMillis();notice(label);vibrate();
-            if(ehp>0){int retaliation=difficulty.equals("HARD")?13:difficulty.equals("EASY")?4:8;hp=Math.max(0,hp-retaliation);if(hp>0&&random.nextInt(4)==0)enemyX=Math.max(playerX+95,enemyX-15);}
-            if(ehp==0){wins++;screen=4;}else if(hp==0)screen=4;
+            if(e.getAction()!=MotionEvent.ACTION_UP)return true;
+            float x=e.getX()/getWidth(),y=e.getY()/getHeight();World a=game.world;
+            if(!a.started||a.hp<=0||a.ehp<=0){
+                if(y>.47f&&y<.59f){game.act(a.started?"REMATCH":"START");}
+                else if(y>.59f&&y<.70f){game.act("HERO");}
+            }else if(a.paused){game.act("PAUSE");}
+            else if(y<.13f&&x>.87f){game.act("PAUSE");}
+            else if(y>.78f){
+                if(x<.125f)game.act("LEFT");else if(x<.25f)game.act("RIGHT");else if(x<.44f)game.act("PUNCH");else if(x<.575f)game.act("KICK");else if(x<.74f)game.act("SPECIAL");else if(x<.855f)game.act("BLOCK");else game.act("JUMP");
+            }else if(y>.13f&&y<.23f&&x<.24f)game.act("HERO");
+            else if(y>.23f&&y<.32f&&x<.24f)game.act("WEAPON");
+            invalidate();return true;
         }
     }
 }
