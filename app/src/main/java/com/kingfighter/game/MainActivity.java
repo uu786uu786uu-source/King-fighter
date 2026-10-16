@@ -69,10 +69,11 @@ public class MainActivity extends Activity {
             gl.glPushMatrix();gl.glTranslatef(0,-0.1f,0);
             gl.glColor4f(.035f,.07f,.13f,1);cube(gl,9,.12f,5);
             gl.glColor4f(.04f,.28f,.38f,1);
-            gl.glLineWidth(1.5f);gl.glBegin(GL10.GL_LINES);
-            for(int i=-8;i<=8;i++){gl.glVertex3f(i*.5f,.07f,-2.5f);gl.glVertex3f(i*.5f,.07f,2.5f);}
-            for(int i=-5;i<=5;i++){gl.glVertex3f(-4,.07f,i*.5f);gl.glVertex3f(4,.07f,i*.5f);}
-            gl.glEnd();gl.glPopMatrix();
+            float[] lines=new float[ (17+11)*6 ]; int n=0;
+            for(int i=-8;i<=8;i++){lines[n++]=i*.5f;lines[n++]=.07f;lines[n++]=-2.5f;lines[n++]=i*.5f;lines[n++]=.07f;lines[n++]=2.5f;}
+            for(int i=-5;i<=5;i++){lines[n++]=-4;lines[n++]=.07f;lines[n++]=i*.5f;lines[n++]=4;lines[n++]=.07f;lines[n++]=i*.5f;}
+            FloatBuffer lb=ByteBuffer.allocateDirect(lines.length*4).order(ByteOrder.nativeOrder()).asFloatBuffer();lb.put(lines).position(0);
+            gl.glLineWidth(1.5f);gl.glEnableClientState(GL10.GL_VERTEX_ARRAY);gl.glVertexPointer(3,GL10.GL_FLOAT,0,lb);gl.glDrawArrays(GL10.GL_LINES,0,lines.length/3);gl.glDisableClientState(GL10.GL_VERTEX_ARRAY);gl.glPopMatrix();
             for(int i=0;i<8;i++){gl.glPushMatrix();gl.glTranslatef(-4.4f+i*1.25f,1.1f,-3.4f);gl.glColor4f(i%2==0?.04f:.12f,.10f,.22f,1);cube(gl,.25f,2.2f,.28f);gl.glPopMatrix();}
             gl.glEnable(GL10.GL_LIGHTING);
         }
@@ -93,9 +94,16 @@ public class MainActivity extends Activity {
             gl.glPopMatrix();
         }
         void cube(GL10 gl,float x,float y,float z){
-            float[] v={-1,-1,1,1,-1,1,1,1,1,-1,1,1, 1,-1,-1,-1,-1,-1,-1,1,-1,1,1,-1, -1,-1,-1,-1,-1,1,-1,1,1,-1,1,-1, 1,-1,1,1,-1,-1,1,1,-1,1,1,1, -1,1,1,1,1,1,1,1,-1,-1,1,-1, -1,-1,-1,1,-1,-1,1,-1,1,-1,-1,1};
+            float[] v={
+              -1,-1,1, 1,-1,1, 1,1,1, -1,-1,1, 1,1,1, -1,1,1,
+              1,-1,-1, -1,-1,-1, -1,1,-1, 1,-1,-1, -1,1,-1, 1,1,-1,
+              -1,-1,-1, -1,-1,1, -1,1,1, -1,-1,-1, -1,1,1, -1,1,-1,
+              1,-1,1, 1,-1,-1, 1,1,-1, 1,-1,1, 1,1,-1, 1,1,1,
+              -1,1,1, 1,1,1, 1,1,-1, -1,1,1, 1,1,-1, -1,1,-1,
+              -1,-1,-1, 1,-1,-1, 1,-1,1, -1,-1,-1, 1,-1,1, -1,-1,1
+            };
             FloatBuffer buf=ByteBuffer.allocateDirect(v.length*4).order(ByteOrder.nativeOrder()).asFloatBuffer();buf.put(v).position(0);
-            gl.glPushMatrix();gl.glScalef(x/2,y/2,z/2);gl.glEnableClientState(GL10.GL_VERTEX_ARRAY);gl.glVertexPointer(3,GL10.GL_FLOAT,0,buf);gl.glDrawArrays(GL10.GL_QUADS,0,24);gl.glDisableClientState(GL10.GL_VERTEX_ARRAY);gl.glPopMatrix();
+            gl.glPushMatrix();gl.glScalef(x/2,y/2,z/2);gl.glEnableClientState(GL10.GL_VERTEX_ARRAY);gl.glVertexPointer(3,GL10.GL_FLOAT,0,buf);gl.glDrawArrays(GL10.GL_TRIANGLES,0,36);gl.glDisableClientState(GL10.GL_VERTEX_ARRAY);gl.glPopMatrix();
         }
         void sphere(GL10 gl,float x,float y,float z){cube(gl,x,y,z);}
         synchronized void action(String a){
