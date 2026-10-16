@@ -81,7 +81,7 @@ public class MainActivity extends Activity {
             round(c,w*.38f,y+Math.min(46,h*.085f),w*.62f,y+Math.min(49,h*.09f),2,CYAN);
         }
         void drawMenu(Canvas c,int w,int h){
-            drawLogo(c,w,h*.16f);
+            drawLogo(c,w,h,h*.16f);
             centered(c,"RISE. FIGHT. RULE THE ARENA.",w/2f,h*.39f,Math.min(22,w*.035f),0xffb8c9df,true);
             float bw=Math.min(300,w*.42f), bh=Math.min(55,h*.105f), x=(w-bw)/2;
             button(c,x,h*.48f,x+bw,h*.48f+bh,"PLAY NOW",0xff087dba,true);
