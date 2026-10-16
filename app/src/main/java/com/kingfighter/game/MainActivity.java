@@ -38,7 +38,7 @@ public class MainActivity extends Activity {
         void round(Canvas c,float l,float t,float r,float b,float rad,int col){color(col);c.drawRoundRect(l,t,r,b,rad,rad,p);}
         void line(Canvas c,float x1,float y1,float x2,float y2,float width,int col){color(col);p.setStrokeWidth(width);p.setStrokeCap(Paint.Cap.ROUND);c.drawLine(x1,y1,x2,y2,p);p.setStrokeWidth(1);}
         void txt(Canvas c,String s,float x,float y,float size,int col,boolean bold){
-            color(col);p.setTextSize(size);p.setTypeface(Typeface.create("sans-serif-condensed",bold?Typeface.BOLD:Typeface.NORMAL));p.setLetterSpacingCompat(0);c.drawText(s,x,y,p);
+            color(col);p.setTextSize(size);p.setTypeface(Typeface.create("sans-serif-condensed",bold?Typeface.BOLD:Typeface.NORMAL));c.drawText(s,x,y,p);
         }
         void centered(Canvas c,String s,float x,float y,float size,int col,boolean bold){color(col);p.setTextSize(size);p.setTypeface(Typeface.create("sans-serif-condensed",bold?Typeface.BOLD:Typeface.NORMAL));c.drawText(s,x-p.measureText(s)/2,y,p);}
         void glowText(Canvas c,String s,float x,float y,float size,int col){color(col);p.setTextSize(size);p.setTypeface(Typeface.create("sans-serif-condensed",Typeface.BOLD));p.setShadowLayer(18,0,0,col);c.drawText(s,x,y,p);p.clearShadowLayer();}
