@@ -35,7 +35,7 @@ public class MainActivity extends Activity {
         volatile int hero=0, weapon=0, hp=100, ehp=100, score=0, combo=0;
         volatile boolean started=false, paused=false, blocking=false;
         volatile float playerX=-1.15f, enemyX=1.15f, playerZ=0, enemyZ=0;
-        volatile long attackUntil=0,lastEnemy=0,lastCombo=0;
+        volatile long attackUntil=0,lastEnemy=0,lastCombo=0,enemyAttackUntil=0,playerHitUntil=0,enemyHitUntil=0;
         volatile String message="TAP START TO FIGHT";
         final int[] colors={0xff18d9ff,0xffbd67ff,0xffffa33a,0xff65f28b};
         final String[] names={"VOLT","SHADOW","TITAN","PHANTOM"};
@@ -55,7 +55,7 @@ public class MainActivity extends Activity {
             drawArena(gl);
             long now=System.currentTimeMillis();
             if(started&&!paused&&hp>0&&ehp>0){
-                if(now-lastEnemy>1650){lastEnemy=now;if(Math.abs(playerX-enemyX)<2.65f&&!blocking){hp=Math.max(0,hp-(hero==2?5:8));message="RIVAL COUNTERATTACK!";}else if(Math.abs(playerX-enemyX)>=2.65f){enemyX+=enemyX>playerX?-.12f:.12f;}}
+                if(now-lastEnemy>1550){lastEnemy=now;if(Math.abs(playerX-enemyX)<2.85f){enemyAttackUntil=now+420;if(!blocking){hp=Math.max(0,hp-(hero==2?5:8));playerHitUntil=now+240;message="RIVAL COUNTERATTACK!";}}else{enemyX+=enemyX>playerX?-.16f:.16f;}}
                 if(now>attackUntil&&Math.abs(playerX-enemyX)>2.65f)enemyX+=enemyX>playerX?-.012f:.012f;
                 playerX=Math.max(-3.1f,Math.min(0.65f,playerX));enemyX=Math.max(-0.65f,Math.min(3.1f,enemyX));
             }
@@ -81,14 +81,16 @@ public class MainActivity extends Activity {
         void drawFighter(GL10 gl,float x,float z,int col,boolean player,boolean attack,int type,int wp,long now){
             float bob=(float)Math.sin(now/170.0+(player?0:1))*.035f;
             gl.glPushMatrix();gl.glTranslatef(x,bob,z);gl.glRotatef(player?18:-18,0,1,0);
+            if(attack)gl.glRotatef(player?-9:11,0,0,1);
+            if((player&&now<playerHitUntil)||(!player&&now<enemyHitUntil)){gl.glTranslatef((float)Math.sin(now*.12)*.06f,0,0);}
             int dark=0xff172237,accent=col;
             // legs and armored boots
-            gl.glPushMatrix();gl.glTranslatef(-.19f,.38f,0);gl.glRotatef((attack? -24: (float)Math.sin(now/240.0)*4),1,0,0);mat(gl,dark);cube(gl,.18f,.62f,.22f);gl.glTranslatef(0,-.29f,.09f);mat(gl,accent);cube(gl,.23f,.12f,.34f);gl.glPopMatrix();
-            gl.glPushMatrix();gl.glTranslatef(.19f,.38f,0);gl.glRotatef(attack?18:(float)Math.sin(now/240.0)*4,1,0,0);mat(gl,dark);cube(gl,.18f,.62f,.22f);gl.glTranslatef(0,-.29f,.09f);mat(gl,accent);cube(gl,.23f,.12f,.34f);gl.glPopMatrix();
+            gl.glPushMatrix();gl.glTranslatef(-.19f,.38f,0);gl.glRotatef((attack? -48: (float)Math.sin(now/240.0)*8),1,0,0);mat(gl,dark);cube(gl,.18f,.62f,.22f);gl.glTranslatef(0,-.29f,.09f);mat(gl,accent);cube(gl,.23f,.12f,.34f);gl.glPopMatrix();
+            gl.glPushMatrix();gl.glTranslatef(.19f,.38f,0);gl.glRotatef(attack?34:(float)Math.sin(now/240.0+1)*8,1,0,0);mat(gl,dark);cube(gl,.18f,.62f,.22f);gl.glTranslatef(0,-.29f,.09f);mat(gl,accent);cube(gl,.23f,.12f,.34f);gl.glPopMatrix();
             gl.glPushMatrix();gl.glTranslatef(0,1.05f,0);mat(gl,accent);cube(gl,.58f,.68f,.34f);gl.glTranslatef(0,.02f,.19f);mat(gl,0xffd5eaff);cube(gl,.26f,.09f,.025f);gl.glPopMatrix();
             gl.glPushMatrix();gl.glTranslatef(0,1.58f,0);mat(gl,0xffd6a783);sphere(gl,.22f,.22f,.22f);gl.glTranslatef(0,.10f,0);mat(gl,dark);cube(gl,.42f,.13f,.4f);gl.glPopMatrix();
             // arms and fists
-            for(int side=-1;side<=1;side+=2){gl.glPushMatrix();gl.glTranslatef(side*.39f,1.24f,0);gl.glRotatef(attack&&side==(player?1:-1)?-58:(float)Math.sin(now/220.0+side)*10,1,0,0);gl.glRotatef(side*12,0,0,1);mat(gl,accent);cube(gl,.17f,.48f,.20f);gl.glTranslatef(0,-.28f,.05f);mat(gl,0xffd7e3f1);sphere(gl,.13f,.13f,.13f);
+            for(int side=-1;side<=1;side+=2){gl.glPushMatrix();gl.glTranslatef(side*.39f,1.24f,0);gl.glRotatef(attack&&side==(player?1:-1)?-82:(float)Math.sin(now/220.0+side)*15,1,0,0);gl.glRotatef(side*12,0,0,1);mat(gl,accent);cube(gl,.17f,.48f,.20f);gl.glTranslatef(0,-.28f,.05f);mat(gl,0xffd7e3f1);sphere(gl,.13f,.13f,.13f);
                 if(player&&wp>0&&side==1){gl.glTranslatef(.08f,-.04f,.1f);mat(gl,wp==1?0xff45efff:wp==2?0xffffb13b:0xffc1a7ff);cube(gl,wp==2?.16f:.06f,wp==2?.58f:.65f,wp==2?.13f:.08f);}
                 gl.glPopMatrix();}
             gl.glPopMatrix();
