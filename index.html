@@ -26,7 +26,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/fireba
 import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, GoogleAuthProvider, signInWithPopup, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import { getFirestore, collection, doc, setDoc, addDoc, getDoc, getDocs, query, where, orderBy, onSnapshot, serverTimestamp, limit } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 // Replace these placeholders with the Web App config from Firebase Console > Project settings.
-const firebaseConfig = {apiKey: "AIzaSyATfe-auJU0CdMyRN0YS7oIhB85dGL8gmU",authDomain:"YOUR_PROJECT.firebaseapp.com",projectId: "kingchat-ecbd6",storageBucket:"YOUR_PROJECT.appspot.com",messagingSenderId:"YOUR_SENDER_ID",appId: "1:317953265600:web:6977c511217f9dc76e8225"};
+const firebaseConfig = {apiKey: "AIzaSyATfe-auJU0CdMyRN0YS7oIhB85dGL8gmU",authDomain:"kingchat-ecbd6.firebaseapp.com",projectId: "kingchat-ecbd6",storageBucket:"kingchat-ecbd6.firebasestorage.app",messagingSenderId:"317953265600",appId: "1:317953265600:web:6977c511217f9dc76e8225"};
 const authView=document.querySelector('#authView'),appView=document.querySelector('#appView'),main=document.querySelector('#main'),composer=document.querySelector('#composer'),searchWrap=document.querySelector('#searchWrap');
 let app,auth,db,currentUser,activeTab='chats',activeChat=null,unsubMessages=null,unsubChats=null,allUsers=[];
 const msg=(s)=>document.querySelector('#authMessage').textContent=s;
