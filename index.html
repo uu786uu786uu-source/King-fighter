@@ -32,7 +32,7 @@ const msg=(s)=>document.querySelector('#authMessage').textContent=s;
 try { if(firebaseConfig.apiKey!=="YOUR_API_KEY"){app=initializeApp(firebaseConfig);auth=getAuth(app);db=getFirestore(app);onAuthStateChanged(auth,async u=>{currentUser=u;if(u){authView.classList.add('hidden');appView.classList.remove('hidden');await setDoc(doc(db,'users',u.uid),{uid:u.uid,name:u.displayName||u.email?.split('@')[0]||'King Chat user',email:u.email||'',photoURL:u.photoURL||'',lastSeen:serverTimestamp()},{merge:true});renderTab('chats')}else{appView.classList.add('hidden');authView.classList.remove('hidden');if(unsubChats)unsubChats();if(unsubMessages)unsubMessages()}})}else{msg('Setup required: add your Firebase web config in index.html. See README for steps.')}}catch(e){msg(e.message)}
 document.querySelector('#sendOtp').onclick=async()=>{try{
  const phone=document.querySelector('#phoneNumber').value.trim();
- if(!/^\\+[1-9]\\d{7,14}$/.test(phone)){msg('Please enter phone with country code, e.g. +923001234567');return}
+ if(!/^\+[1-9]\d{7,14}$/.test(phone)){msg('Please enter phone with country code, e.g. +923001234567');return}
  if(!recaptchaVerifier)recaptchaVerifier=new RecaptchaVerifier(auth,'recaptcha-container',{size:'normal'});
  phoneConfirmation=await signInWithPhoneNumber(auth,phone,recaptchaVerifier);
  msg('SMS code sent. Enter the code above.');
