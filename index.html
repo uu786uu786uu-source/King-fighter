@@ -11,7 +11,7 @@
 <div id="authView" class="auth">
  <div class="brand" style="color:#075e54">👑 King Chat</div><p class="muted">Private messaging, built for your community.</p>
  <h1>Welcome</h1><input id="email" class="field" type="email" placeholder="Email address" autocomplete="email"><input id="password" class="field" type="password" placeholder="Password (6+ characters)" autocomplete="current-password">
- <button id="signIn" style="width:100%;margin-top:8px">Sign in</button><button id="signUp" style="width:100%;margin-top:8px;background:#128c7e">Create account</button><button id="googleIn" style="width:100%;margin-top:8px;background:#fff;color:#333;border:1px solid #ddd">Continue with Google</button>
+ <button id="signIn" style="width:100%;margin-top:8px">Sign in</button><button id="signUp" style="width:100%;margin-top:8px;background:#128c7e">Create account</button><button id="googleIn" style="width:100%;margin-top:8px;background:#fff;color:#333;border:1px solid #ddd">Continue with Google</button><hr style="border:0;border-top:1px solid #eee;margin:18px 0"><h3 style="margin:8px 0;color:#075e54">Sign in with phone number</h3><input id="phoneNumber" class="field" type="tel" placeholder="+92 3XX XXXXXXX" autocomplete="tel"><div id="recaptcha-container"></div><button id="sendOtp" style="width:100%;margin-top:8px">Send SMS code</button><input id="phoneCode" class="field" inputmode="numeric" autocomplete="one-time-code" placeholder="SMS verification code"><button id="verifyOtp" style="width:100%;margin-top:8px;background:#128c7e">Verify code & sign in</button>
  <p class="muted">Google sign-in works after you enable it in your Firebase project.</p><p id="authMessage" class="muted"></p>
 </div>
 <div id="appView" class="app hidden">
@@ -23,17 +23,26 @@
 </div>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, GoogleAuthProvider, signInWithPopup, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, GoogleAuthProvider, signInWithPopup, signOut, updateProfile, RecaptchaVerifier, signInWithPhoneNumber } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import { getFirestore, collection, doc, setDoc, addDoc, getDoc, getDocs, query, where, orderBy, onSnapshot, serverTimestamp, limit } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 // Replace these placeholders with the Web App config from Firebase Console > Project settings.
 const firebaseConfig = {apiKey: "AIzaSyATfe-auJU0CdMyRN0YS7oIhB85dGL8gmU",authDomain:"kingchat-ecbd6.firebaseapp.com",projectId: "kingchat-ecbd6",storageBucket:"kingchat-ecbd6.firebasestorage.app",messagingSenderId:"317953265600",appId: "1:317953265600:web:6977c511217f9dc76e8225"};
 const authView=document.querySelector('#authView'),appView=document.querySelector('#appView'),main=document.querySelector('#main'),composer=document.querySelector('#composer'),searchWrap=document.querySelector('#searchWrap');
-let app,auth,db,currentUser,activeTab='chats',activeChat=null,unsubMessages=null,unsubChats=null,allUsers=[];
+let app,auth,db,currentUser,activeTab='chats',activeChat=null,unsubMessages=null,unsubChats=null,allUsers=[],phoneConfirmation=null,recaptchaVerifier=null;
 const msg=(s)=>document.querySelector('#authMessage').textContent=s;
 try { if(firebaseConfig.apiKey!=="YOUR_API_KEY"){app=initializeApp(firebaseConfig);auth=getAuth(app);db=getFirestore(app);onAuthStateChanged(auth,async u=>{currentUser=u;if(u){authView.classList.add('hidden');appView.classList.remove('hidden');await setDoc(doc(db,'users',u.uid),{uid:u.uid,name:u.displayName||u.email?.split('@')[0]||'King Chat user',email:u.email||'',photoURL:u.photoURL||'',lastSeen:serverTimestamp()},{merge:true});renderTab('chats')}else{appView.classList.add('hidden');authView.classList.remove('hidden');if(unsubChats)unsubChats();if(unsubMessages)unsubMessages()}})}else{msg('Setup required: add your Firebase web config in index.html. See README for steps.')}}catch(e){msg(e.message)}
 document.querySelector('#signIn').onclick=async()=>{try{await signInWithEmailAndPassword(auth,document.querySelector('#email').value,document.querySelector('#password').value);msg('')}catch(e){msg(e.message)}};
 document.querySelector('#signUp').onclick=async()=>{try{const c=await createUserWithEmailAndPassword(auth,document.querySelector('#email').value,document.querySelector('#password').value);await updateProfile(c.user,{displayName:c.user.email.split('@')[0]});msg('')}catch(e){msg(e.message)}};
 document.querySelector('#googleIn').onclick=async()=>{try{await signInWithPopup(auth,new GoogleAuthProvider())}catch(e){msg(e.message)}};
+document.querySelector('#sendOtp').onclick=async()=>{try{
+ const phone=document.querySelector('#phoneNumber').value.trim();
+ if(!/^\\+[1-9]\\d{7,14}$/.test(phone)){msg('Please enter phone with country code, e.g. +923001234567');return}
+ if(!recaptchaVerifier)recaptchaVerifier=new RecaptchaVerifier(auth,'recaptcha-container',{size:'normal'});
+ phoneConfirmation=await signInWithPhoneNumber(auth,phone,recaptchaVerifier);
+ msg('SMS code sent. Enter the code above.');
+ }catch(e){msg('Could not send SMS: '+e.message);if(recaptchaVerifier){try{await recaptchaVerifier.clear()}catch{}recaptchaVerifier=null}}
+};
+document.querySelector('#verifyOtp').onclick=async()=>{try{if(!phoneConfirmation){msg('First tap Send SMS code.');return}await phoneConfirmation.confirm(document.querySelector('#phoneCode').value.trim());msg('Phone verified.')}catch(e){msg('Verification failed: '+e.message)}};
 document.querySelector('#logout').onclick=()=>signOut(auth);
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>renderTab(t.dataset.tab));
 document.querySelector('#search').addEventListener('input',()=>renderTab(activeTab));
