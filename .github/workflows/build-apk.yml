@@ -1,11 +1,14 @@
-name: Build KING FIGHTER APK
+name: Build King Chat APK
 on:
   push:
     branches: [main]
+    paths:
+      - 'index.html'
+      - 'android/**'
+      - '.github/workflows/build-apk.yml'
   workflow_dispatch:
 permissions:
   contents: read
-  actions: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -21,11 +24,15 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+      - name: Prepare app assets
+        run: |
+          mkdir -p android/app/src/main/assets
+          cp index.html android/app/src/main/assets/index.html
       - name: Build debug APK
-        run: gradle --no-daemon assembleDebug
+        run: gradle --no-daemon -p android assembleDebug
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: KING-FIGHTER-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: King-Chat-debug-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
