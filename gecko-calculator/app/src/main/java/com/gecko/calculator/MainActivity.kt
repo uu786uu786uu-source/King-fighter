@@ -267,14 +267,7 @@ class MainActivity : Activity() {
         val tokens = Regex("\\d+(?:\\.\\d+)?|[()+\\-*/]").findAll(s).map { it.value }.toList()
         if (tokens.joinToString("") != s) throw IllegalArgumentException()
         var i = 0
-        fun expr(): Double {
-            var v = term()
-            while (i < tokens.size && (tokens[i] == "+" || tokens[i] == "-")) {
-                val op = tokens[i++]; val r = term(); v = if (op == "+") v+r else v-r
-            }
-            return v
-        }
-        fun unused() = 0
+        lateinit var parseExpression: () -> Double
         lateinit var parseTerm: () -> Double
         lateinit var parseFactor: () -> Double
         parseFactor = {
@@ -283,25 +276,31 @@ class MainActivity : Activity() {
             when (t) {
                 "+" -> parseFactor()
                 "-" -> -parseFactor()
-                "(" -> { val v = expr(); if (i >= tokens.size || tokens[i++] != ")") throw IllegalArgumentException(); v }
+                "(" -> {
+                    val v = parseExpression()
+                    if (i >= tokens.size || tokens[i++] != ")") throw IllegalArgumentException()
+                    v
+                }
                 else -> t.toDouble()
             }
         }
         parseTerm = {
             var v = parseFactor()
             while (i < tokens.size && (tokens[i] == "*" || tokens[i] == "/")) {
-                val op = tokens[i++]; val r = parseFactor()
-                v = if (op == "*") v*r else v/r
+                val op = tokens[i++]
+                val r = parseFactor()
+                v = if (op == "*") v * r else v / r
             }
             v
         }
-        // Precedence-aware recursive descent.
-        fun parseExpression(): Double {
+        parseExpression = {
             var v = parseTerm()
             while (i < tokens.size && (tokens[i] == "+" || tokens[i] == "-")) {
-                val op = tokens[i++]; val r = parseTerm(); v = if (op == "+") v+r else v-r
+                val op = tokens[i++]
+                val r = parseTerm()
+                v = if (op == "+") v + r else v - r
             }
-            return v
+            v
         }
         val result = parseExpression()
         if (i != tokens.size || !result.isFinite()) throw IllegalArgumentException()
