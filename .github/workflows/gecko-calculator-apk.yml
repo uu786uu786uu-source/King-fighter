@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   build:
+    name: Build Gecko Calculator APK
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
@@ -25,28 +26,33 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-        with:
-          packages: |
-            platform-tools
-            platforms;android-35
-            build-tools;35.0.0
 
-      - name: Verify Android SDK
+      - name: Accept Android SDK licenses and install packages
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          sdkmanager --list_installed
+          yes | sdkmanager --licenses || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
+      - name: Check project files
+        run: |
+          test -f gecko-calculator/settings.gradle
+          test -f gecko-calculator/build.gradle
+          test -f gecko-calculator/app/build.gradle
+          test -f gecko-calculator/app/src/main/AndroidManifest.xml
+          test -f gecko-calculator/app/src/main/java/com/gecko/calculator/MainActivity.kt
+
       - name: Build debug APK
         working-directory: gecko-calculator
         run: gradle --no-daemon --stacktrace assembleDebug
 
       - name: Verify APK exists
-        run: test -f gecko-calculator/app/build/outputs/apk/debug/app-debug.apk
+        run: |
+          ls -lh gecko-calculator/app/build/outputs/apk/debug/
+          test -s gecko-calculator/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
