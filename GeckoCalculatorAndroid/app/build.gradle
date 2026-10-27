@@ -1,0 +1,17 @@
+plugins {
+    id 'com.android.application'
+}
+android {
+    namespace 'com.geckocalculator.app'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'com.geckocalculator.app'
+        minSdk 23
+        targetSdk 35
+        versionCode 1
+        versionName '1.0.0'
+    }
+}
+dependencies {
+    implementation 'com.google.android.gms:play-services-ads:23.6.0'
+}
