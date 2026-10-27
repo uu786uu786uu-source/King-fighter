@@ -261,49 +261,52 @@ class MainActivity : Activity() {
     private fun backButton() = Button(this).apply { text = "Back to Calculator"; setOnClickListener { showCalculator() } }
     private fun showAlert(message: String) = android.app.AlertDialog.Builder(this).setTitle("Gecko Calculator").setMessage(message).setPositiveButton("OK", null).show()
 
-    private fun evaluate(input: String): Double {
-        val s = input.replace(" ", "")
-        if (s.isEmpty()) return 0.0
-        val tokens = Regex("\\d+(?:\\.\\d+)?|[()+\\-*/]").findAll(s).map { it.value }.toList()
-        if (tokens.joinToString("") != s) throw IllegalArgumentException()
-        var i = 0
-        lateinit var parseExpression: () -> Double
-        lateinit var parseTerm: () -> Double
-        lateinit var parseFactor: () -> Double
-        parseFactor = {
-            if (i >= tokens.size) throw IllegalArgumentException()
-            val t = tokens[i++]
-            when (t) {
-                "+" -> parseFactor()
-                "-" -> -parseFactor()
+    private fun evaluate(input: String): Double = ExpressionParser(input).parse()
+
+    private class ExpressionParser(input: String) {
+        private val source = input.replace(" ", "")
+        private val tokens = Regex("\\d+(?:\\.\\d+)?|[()+\\-*/]").findAll(source).map { it.value }.toList()
+        private var index = 0
+
+        fun parse(): Double {
+            if (source.isEmpty() || tokens.joinToString("") != source) throw IllegalArgumentException()
+            val value = expression()
+            if (index != tokens.size || !value.isFinite()) throw IllegalArgumentException()
+            return value
+        }
+
+        private fun expression(): Double {
+            var value = term()
+            while (index < tokens.size && (tokens[index] == "+" || tokens[index] == "-")) {
+                val op = tokens[index++]
+                val right = term()
+                value = if (op == "+") value + right else value - right
+            }
+            return value
+        }
+
+        private fun term(): Double {
+            var value = factor()
+            while (index < tokens.size && (tokens[index] == "*" || tokens[index] == "/")) {
+                val op = tokens[index++]
+                val right = factor()
+                value = if (op == "*") value * right else value / right
+            }
+            return value
+        }
+
+        private fun factor(): Double {
+            if (index >= tokens.size) throw IllegalArgumentException()
+            return when (val token = tokens[index++]) {
+                "+" -> factor()
+                "-" -> -factor()
                 "(" -> {
-                    val v = parseExpression()
-                    if (i >= tokens.size || tokens[i++] != ")") throw IllegalArgumentException()
-                    v
+                    val value = expression()
+                    if (index >= tokens.size || tokens[index++] != ")") throw IllegalArgumentException()
+                    value
                 }
-                else -> t.toDouble()
+                else -> token.toDouble()
             }
         }
-        parseTerm = {
-            var v = parseFactor()
-            while (i < tokens.size && (tokens[i] == "*" || tokens[i] == "/")) {
-                val op = tokens[i++]
-                val r = parseFactor()
-                v = if (op == "*") v * r else v / r
-            }
-            v
-        }
-        parseExpression = {
-            var v = parseTerm()
-            while (i < tokens.size && (tokens[i] == "+" || tokens[i] == "-")) {
-                val op = tokens[i++]
-                val r = parseTerm()
-                v = if (op == "+") v + r else v - r
-            }
-            v
-        }
-        val result = parseExpression()
-        if (i != tokens.size || !result.isFinite()) throw IllegalArgumentException()
-        return result
     }
 }
