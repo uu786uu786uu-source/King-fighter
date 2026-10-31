@@ -1,0 +1,49 @@
+name: Build King Chat Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - kingchat/production-demo
+    paths:
+      - "apps/kingchat/**"
+      - ".github/workflows/kingchat-android.yml"
+
+jobs:
+  android-apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/kingchat
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/kingchat/package.json
+      - name: Install dependencies
+        run: npm install
+      - name: TypeScript check
+        run: npm run typecheck
+      - name: Generate native Android project
+        run: npx expo prebuild --platform android --non-interactive
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Build release APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: king-chat-android-apk
+          path: apps/kingchat/android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
