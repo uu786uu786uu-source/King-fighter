@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "King Chat",
+    "slug": "king-chat",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "kingchat",
+    "android": {
+      "package": "com.kingchat.app"
+    },
+    "ios": {
+      "supportsTablet": true
+    }
+  }
+}
