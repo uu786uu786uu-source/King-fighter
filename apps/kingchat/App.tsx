@@ -263,11 +263,12 @@ export default function App() {
       const profileMap=new Map(profiles.filter(p=>peerIds.includes(p.id)).map(p=>[p.id,p]));
       const latest=new Map<string,any>();
       for(const message of (messageResult.data||[]) as any[]) if(!latest.has(message.conversation_id)) latest.set(message.conversation_id,message);
-      const mapped:Chat[]=rows.map(row=>{
+      const mapped:Chat[]=await Promise.all(rows.map(async row=>{
         const conv=row.conversation||{};
         const peers=members.filter(m=>m.conversation_id===row.conversation_id&&m.user_id!==session.user.id);
         const peer=peers.length?profileMap.get(peers[0].user_id):null;
         const name=conv.kind==='group'?(conv.title||'Group chat'):(peer?.display_name||'Guftin member');
+        const avatarUrl=peer?.avatar_url?(await supabase.storage.from('chat-media').createSignedUrl(peer.avatar_url,60*60*24)).data?.signedUrl||undefined:undefined;
         const last=latest.get(row.conversation_id);
         const readThrough=Math.max(
           row.last_read_at?new Date(row.last_read_at).getTime():0,
@@ -288,10 +289,10 @@ export default function App() {
             catch{preview='🔒 Encrypted message';}
           }else preview=last.body||'Attachment';
         }
-        return {id:row.conversation_id,name,avatar:initials(name),color:colorFor(name),last:preview,
+        return {id:row.conversation_id,name,avatar:initials(name),avatarUrl,color:colorFor(name),last:preview,
           time:last?timeLabel(last.created_at):'',unread,online:!!peer?.is_online,kind:conv.kind||'direct',
           lastAt:last?new Date(last.created_at).getTime():new Date(conv.updated_at||row.joined_at).getTime()};
-      }).sort((a,b)=>b.lastAt-a.lastAt);
+      }))).sort((a,b)=>b.lastAt-a.lastAt);
       setChats(mapped);
     }catch(e:any){
       Alert.alert('Inbox could not load',e?.message||'Please check your connection and try again.');
