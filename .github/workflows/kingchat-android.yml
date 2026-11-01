@@ -1,5 +1,9 @@
 name: Build King Chat Android APK
 
+concurrency:
+  group: kingchat-android-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   workflow_dispatch:
   push:
