@@ -7,7 +7,9 @@
     "start": "expo start",
     "android": "expo start --android",
     "web": "expo start --web",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepare:assets": "node scripts/prepare-assets.js",
+    "eas-build-post-install": "npm run prepare:assets"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
