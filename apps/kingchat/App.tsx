@@ -15,7 +15,7 @@ type Chat = { id:string; name:string; avatar:string; color:string; last:string; 
 type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; created_at:string; mine:boolean };
 const AUTH_REDIRECT_URL = 'kingchat://auth/callback';
 const palette = ['#d49a91','#8796c7','#81ad98','#bd8aa8','#c4a47c','#9a91bd'];
-const initials = (s:string) => s.trim().split(/\\s+/).slice(0,2).map(x=>x[0]||'').join('').toUpperCase() || 'KC';
+const initials = (s:string) => s.trim().split(/\s+/).slice(0,2).map(x=>x[0]||'').join('').toUpperCase() || 'KC';
 const colorFor = (s:string) => { let n=0; for(let i=0;i<s.length;i++) n=(n*31+s.charCodeAt(i))>>>0; return palette[n%palette.length]; };
 const timeLabel = (value:string) => {
   if(!value) return '';
@@ -75,7 +75,7 @@ export default function App() {
     const fragment=url.split('#')[1]||'';
     const read=(source:string,key:string)=>{
       const match=source.match(new RegExp('(?:^|&)'+key+'=([^&]+)'));
-      return match?decodeURIComponent(match[1].replace(/\\+/g,' ')):'';
+      return match?decodeURIComponent(match[1].replace(/\+/g,' ')):'';
     };
     const code=read(query,'code');
     const tokenHash=read(query,'token_hash');
@@ -238,7 +238,7 @@ export default function App() {
     const cleanName=fullName.trim();
     if(cleanName.length<2||cleanName.length>40){setAuthError('Enter your display name (2-40 characters).');return;}
     if(!/^[a-z0-9_]{3,24}$/.test(cleanUsername)){setAuthError('Username must be 3-24 characters using letters, numbers or underscore.');return;}
-    if(!/^\\S+@\\S+\\.\\S+$/.test(cleanEmail)){setAuthError('Enter a valid email address.');return;}
+    if(!/^\S+@\S+\.\S+$/.test(cleanEmail)){setAuthError('Enter a valid email address.');return;}
     if(password.length<8){setAuthError('Password must be at least 8 characters.');return;}
     setAuthBusy(true);setAuthError('');
     const {data,error}=await supabase.auth.signUp({
