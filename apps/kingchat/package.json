@@ -20,7 +20,10 @@
     "expo-linking": "~8.0.12",
     "expo-web-browser": "~15.0.11",
     "expo-image-picker": "17.0.11",
-    "expo-file-system": "19.0.24"
+    "expo-file-system": "19.0.24",
+    "expo-secure-store": "~15.0.8",
+    "expo-crypto": "~15.0.9",
+    "tweetnacl": "1.0.3"
   },
   "devDependencies": {
     "@types/react": "~19.1.10",
