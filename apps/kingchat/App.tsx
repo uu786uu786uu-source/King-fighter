@@ -102,6 +102,7 @@ export default function App() {
   const [messages,setMessages]=useState<Record<string,Message[]>>({});
   const [peerLastReadAt,setPeerLastReadAt]=useState<string|null>(null);
   const activeConversationIdRef=useRef<string|null>(null);
+  const loadMessagesRef=useRef<((id:string)=>Promise<void>)|null>(null);
   useEffect(()=>{
     activeConversationIdRef.current=active?.id||null;
   },[active?.id]);
@@ -374,7 +375,7 @@ export default function App() {
     void supabase.from('kc_profiles').update({is_online:true,last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
     const appState=AppState.addEventListener('change',(state)=>{
       void supabase.from('kc_profiles').update({is_online:onlineVisibility&&state==='active',last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
-      if(state==='active'){void loadInbox();if(activeConversationIdRef.current)void loadMessages(activeConversationIdRef.current);void loadProfile();}
+      if(state==='active'){void loadInbox();if(activeConversationIdRef.current)void loadMessagesRef.current?.(activeConversationIdRef.current);void loadProfile();}
     });
     const channel=supabase.channel('kingchat-user-'+session.user.id)
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'kc_messages'},async payload=>{
@@ -420,7 +421,7 @@ export default function App() {
           setLiveCall((old:any)=>old?.id===call.id?null:old);
         }
       }).subscribe();
-    const syncTimer=setInterval(()=>{if(autoSync&&AppState.currentState==='active'){void loadInbox();if(activeConversationIdRef.current)void loadMessages(activeConversationIdRef.current);}},syncIntervalSeconds*1000);
+    const syncTimer=setInterval(()=>{if(autoSync&&AppState.currentState==='active'){void loadInbox();if(activeConversationIdRef.current)void loadMessagesRef.current?.(activeConversationIdRef.current);}},syncIntervalSeconds*1000);
     return ()=>{
       clearInterval(syncTimer);
       appState.remove();
@@ -428,7 +429,7 @@ export default function App() {
       setIncomingCall(null);setOutgoingCall(null);setLiveCall(null);
       void supabase.from('kc_profiles').update({is_online:false,last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
     };
-  },[session,loadProfile,loadInbox,loadMessages,resolveMessage,joinCall,respondToCall,onlineVisibility,autoSync,syncIntervalSeconds]);
+  },[session,loadProfile,loadInbox,resolveMessage,joinCall,respondToCall,onlineVisibility,autoSync,syncIntervalSeconds]);
 
   const loadMessages=useCallback(async(conversationId:string)=>{
     if(!session) return;
@@ -451,6 +452,7 @@ export default function App() {
     setPeerLastReadAt(peer?.last_read_at||null);
     if(!readError)void loadInbox();
   },[session,resolveMessage,loadInbox]);
+  loadMessagesRef.current=loadMessages;
 
   useEffect(()=>{
     if(session&&deviceIdentity&&active)void loadMessages(active.id);
@@ -690,7 +692,7 @@ export default function App() {
     if(statusAsset){
       try{
         const file=new File(statusAsset.uri);if(file.size>20*1024*1024)throw new Error('Status media must be under 20 MB.');
-        const bytes=new Uint8Array(await file.arrayBuffer()),path=session.user.id+'/status/'+Date.now()+'_'+ExpoCrypto.randomUUID();
+        const bytes=new Uint8Array(await file.arrayBuffer()),ext=statusAsset.type==='video'?'mp4':'jpg',path=session.user.id+'/status/'+Date.now()+'_'+ExpoCrypto.randomUUID()+'.'+ext;
         const mime=statusAsset.mimeType||(statusAsset.type==='video'?'video/mp4':'image/jpeg');
         const {error:uploadError}=await supabase.storage.from('chat-media').upload(path,bytes,{contentType:mime,upsert:false});bytes.fill(0);
         if(uploadError)throw uploadError;media_url=path;
