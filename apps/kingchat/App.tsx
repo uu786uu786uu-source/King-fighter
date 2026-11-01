@@ -13,6 +13,7 @@ WebBrowser.maybeCompleteAuthSession();
 const C = { ink:'#102b27', muted:'#82938e', green:'#087e6c', mint:'#e5f5ee', paper:'#f5f8f6', white:'#fff', line:'#e9efec', red:'#b94e48' };
 type Chat = { id:string; name:string; avatar:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number };
 type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; created_at:string; mine:boolean };
+const AUTH_REDIRECT_URL = 'kingchat://auth/callback';
 const palette = ['#d49a91','#8796c7','#81ad98','#bd8aa8','#c4a47c','#9a91bd'];
 const initials = (s:string) => s.trim().split(/\\s+/).slice(0,2).map(x=>x[0]||'').join('').toUpperCase() || 'KC';
 const colorFor = (s:string) => { let n=0; for(let i=0;i<s.length;i++) n=(n*31+s.charCodeAt(i))>>>0; return palette[n%palette.length]; };
@@ -242,7 +243,7 @@ export default function App() {
     setAuthBusy(true);setAuthError('');
     const {data,error}=await supabase.auth.signUp({
       email:cleanEmail,password,
-      options:{emailRedirectTo:Linking.createURL('auth/callback'),data:{display_name:cleanName,username:cleanUsername}}
+      options:{emailRedirectTo:AUTH_REDIRECT_URL,data:{display_name:cleanName,username:cleanUsername}}
     });
     setAuthBusy(false);
     if(error){setAuthError(error.message);return;}
@@ -266,7 +267,7 @@ export default function App() {
   const googleSignIn=async()=>{
     setAuthBusy(true);setAuthError('');
     try{
-      const redirectTo=Linking.createURL('auth/callback');
+      const redirectTo=AUTH_REDIRECT_URL;
       const {data,error}=await supabase.auth.signInWithOAuth({
         provider:'google',options:{redirectTo,skipBrowserRedirect:true}
       });
