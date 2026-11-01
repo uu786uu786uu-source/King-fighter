@@ -64,7 +64,7 @@ function CallRoomScreen({callType,onHangUp}:any) {
         ListEmptyComponent={<Text style={{color:'#fff',textAlign:'center',marginTop:25}}>Waiting for video…</Text>}
       />:<View style={{alignItems:'center',padding:35}}>
         <Text style={{fontSize:50,color:'#fff'}}>☎</Text>
-        <Text style={{color:'#d8e8e1',marginTop:14}}>King Chat voice connection</Text>
+        <Text style={{color:'#d8e8e1',marginTop:14}}>Guftin voice connection</Text>
       </View>}
     </View>
     <View style={{padding:20,alignItems:'center'}}>
@@ -231,7 +231,7 @@ export default function App() {
         const conv=row.conversation||{};
         const peers=members.filter(m=>m.conversation_id===row.conversation_id&&m.user_id!==session.user.id);
         const peer=peers.length?profileMap.get(peers[0].user_id):null;
-        const name=conv.kind==='group'?(conv.title||'Group chat'):(peer?.display_name||'King Chat member');
+        const name=conv.kind==='group'?(conv.title||'Group chat'):(peer?.display_name||'Guftin member');
         const last=latest.get(row.conversation_id);
         let preview='No messages yet';
         if(last){
@@ -348,7 +348,7 @@ export default function App() {
           setIncomingCall(call);
           Alert.alert(
             call.call_type==='video'?'Incoming video call':'Incoming voice call',
-            'A King Chat contact is calling you.',
+            'A Guftin contact is calling you.',
             [
               {text:'Decline',style:'cancel',onPress:()=>void respondToCall(call,'declined')},
               {text:'Accept',onPress:()=>void respondToCall(call,'accepted')}
@@ -403,7 +403,7 @@ export default function App() {
     const body=draft.trim();
     if(!body||!active||!session||sending) return;
     if(!deviceIdentity||e2eeStatus!=='ready'){
-      Alert.alert('Secure chat is not ready','King Chat is still setting up this device encryption key. Check your connection and reopen the app.');
+      Alert.alert('Secure chat is not ready','Guftin is still setting up this device encryption key. Check your connection and reopen the app.');
       return;
     }
     setSending(true);
@@ -421,7 +421,7 @@ export default function App() {
       const registeredUsers=new Set((devices||[]).map((device:any)=>device.user_id));
       const missingUsers=memberIds.filter(id=>!registeredUsers.has(id));
       if(missingUsers.length){
-        throw new Error('A conversation member has not registered an encryption device yet. Ask them to update and open King Chat before sending secure messages.');
+        throw new Error('A conversation member has not registered an encryption device yet. Ask them to update and open Guftin before sending secure messages.');
       }
       const encryptedBody=encryptMessageForDevices(body,devices||[],deviceIdentity);
       const {data,error}=await supabase.from('kc_messages').insert({
@@ -445,7 +445,7 @@ export default function App() {
   const sendMedia=async()=>{
     if(!active||!session||sending)return;
     if(!deviceIdentity||e2eeStatus!=='ready'){
-      Alert.alert('Secure media is not ready','King Chat is still setting up this device encryption key.');
+      Alert.alert('Secure media is not ready','Guftin is still setting up this device encryption key.');
       return;
     }
     try{
@@ -479,7 +479,7 @@ export default function App() {
       if(devicesError)throw devicesError;
       const registeredUsers=new Set((devices||[]).map((device:any)=>device.user_id));
       if(memberIds.some(id=>!registeredUsers.has(id))){
-        throw new Error('A conversation member must open the latest King Chat build before receiving encrypted media.');
+        throw new Error('A conversation member must open the latest Guftin build before receiving encrypted media.');
       }
 
       const plainBytes=new Uint8Array(await file.arrayBuffer());
@@ -535,7 +535,7 @@ export default function App() {
       }).select('id,conversation_id,caller_id,callee_id,call_type,status').single();
       if(error)throw error;
       setOutgoingCall(data);
-      Alert.alert('Calling','Calling '+active.name+'. Keep King Chat open while they answer.');
+      Alert.alert('Calling','Calling '+active.name+'. Keep Guftin open while they answer.');
     }catch(e:any){
       Alert.alert('Call could not start',e?.message||'Please try again.');
     }finally{
@@ -641,9 +641,9 @@ export default function App() {
     setAdding(false);
     if(error){Alert.alert('Could not find contact',error.message);return;}
     const row=Array.isArray(data)?data[0]:data;
-    if(!row?.conversation_id){Alert.alert('Contact not found','No King Chat account uses this username yet.');return;}
+    if(!row?.conversation_id){Alert.alert('Contact not found','No Guftin account uses this username yet.');return;}
     setAddOpen(false);setContactUsername('');
-    const name=row.display_name||row.username||'King Chat member';
+    const name=row.display_name||row.username||'Guftin member';
     const chat:Chat={id:row.conversation_id,name,avatar:initials(name),color:colorFor(name),last:'No messages yet',time:'',unread:0,online:false,kind:'direct',lastAt:Date.now()};
     setChats(prev=>[chat,...prev.filter(c=>c.id!==chat.id)]);
     setActive(chat);
@@ -663,7 +663,7 @@ export default function App() {
     setSavingProfile(false);
     if(aboutError){Alert.alert('About text not saved',aboutError.message);return;}
     await loadProfile();
-    Alert.alert('Saved','Your King Chat profile has been updated.');
+    Alert.alert('Saved','Your Guftin profile has been updated.');
   };
 
   const loadStatuses=useCallback(async()=>{
@@ -684,7 +684,7 @@ export default function App() {
     const personMap=new Map((people||[]).map((person:any)=>[person.id,person]));
     setStatuses(rows.map(row=>({
       ...row,
-      display_name:(personMap.get(row.user_id) as any)?.display_name||'King Chat member',
+      display_name:(personMap.get(row.user_id) as any)?.display_name||'Guftin member',
       username:(personMap.get(row.user_id) as any)?.username||''
     })));
   },[session]);
@@ -702,10 +702,10 @@ export default function App() {
       <ScrollView contentContainerStyle={{flexGrow:1,justifyContent:'center'}}>
         <View style={{alignItems:'center',marginBottom:34}}>
           <Avatar label="K" color={C.green} size={78}/>
-          <Heading>King Chat</Heading>
+          <Heading>Guftin</Heading>
           <Text style={{color:C.muted,marginTop:8}}>Your world. Your people. One place.</Text>
         </View>
-        <Text style={{fontSize:23,fontWeight:'900',color:C.ink,marginBottom:8}}>{authMode==='signup'?'Create your King Chat ID':'Welcome back'}</Text>
+        <Text style={{fontSize:23,fontWeight:'900',color:C.ink,marginBottom:8}}>{authMode==='signup'?'Create your Guftin ID':'Welcome back'}</Text>
         <Text style={{color:C.muted,marginBottom:18,lineHeight:20}}>{authMode==='signup'?'Create an account with email and choose your unique username.':'Sign in with the email and password linked to your account.'}</Text>
         {authMode==='signup'?<>
           <TextInput value={fullName} onChangeText={setFullName} placeholder="Your full name" autoCapitalize="words" style={{backgroundColor:C.white,borderRadius:15,padding:16,marginBottom:10,color:C.ink}}/>
@@ -724,9 +724,9 @@ export default function App() {
           <Text style={{fontWeight:'900',fontSize:18,color:'#4285F4'}}>G</Text><Text style={{color:C.ink,fontWeight:'800'}}>Continue with Google</Text>
         </Btn>
         <Btn onPress={()=>{setAuthMode(authMode==='signup'?'login':'signup');setAuthError('');}} style={{padding:16,alignItems:'center'}}>
-          <Text style={{color:C.green,fontWeight:'800'}}>{authMode==='signup'?'Already have an account? Sign in':'New to King Chat? Create account'}</Text>
+          <Text style={{color:C.green,fontWeight:'800'}}>{authMode==='signup'?'Already have an account? Sign in':'New to Guftin? Create account'}</Text>
         </Btn>
-        <Text style={{color:C.muted,fontSize:10,textAlign:'center',marginTop:8,lineHeight:16}}>Your username is your King Chat ID. Other members can search it to add you. Email confirmation may be required.</Text>
+        <Text style={{color:C.muted,fontSize:10,textAlign:'center',marginTop:8,lineHeight:16}}>Your username is your Guftin ID. Other members can search it to add you. Email confirmation may be required.</Text>
       </ScrollView>
     </SafeAreaView>;
   }
@@ -738,7 +738,7 @@ export default function App() {
   if(!profile?.username){
     return <SafeAreaView style={{flex:1,backgroundColor:C.paper,padding:24,justifyContent:'center'}}>
       <StatusBar barStyle="dark-content"/>
-      <View style={{alignItems:'center',marginBottom:28}}><Avatar label="K" color={C.green} size={70}/><Heading>Set your King Chat ID</Heading></View>
+      <View style={{alignItems:'center',marginBottom:28}}><Avatar label="K" color={C.green} size={70}/><Heading>Set your Guftin ID</Heading></View>
       <Text style={{fontSize:22,fontWeight:'900',color:C.ink,marginBottom:8}}>Complete your profile</Text>
       <Text style={{color:C.muted,lineHeight:20,marginBottom:18}}>Choose a username that people can search to find and add you.</Text>
       <TextInput value={profileName} onChangeText={setProfileName} placeholder="Your display name" autoCapitalize="words" style={{backgroundColor:C.white,borderRadius:15,padding:16,marginBottom:10,color:C.ink}}/>
@@ -797,7 +797,7 @@ export default function App() {
   return <SafeAreaView style={{flex:1,backgroundColor:C.white}}>
     <StatusBar barStyle="dark-content"/>
     <View style={{paddingHorizontal:22,paddingTop:10,paddingBottom:15,flexDirection:'row',alignItems:'center',justifyContent:'space-between'}}>
-      <View><Heading>{pageTitle}</Heading><Text style={{color:C.muted,fontSize:12,marginTop:4}}>{tab==='Chats'?'Your real conversations':tab==='You'?'Your King Chat ID':'King Chat'}</Text></View>
+      <View><Heading>{pageTitle}</Heading><Text style={{color:C.muted,fontSize:12,marginTop:4}}>{tab==='Chats'?'Your real conversations':tab==='You'?'Your Guftin ID':'Guftin'}</Text></View>
       <View style={{flexDirection:'row',gap:9}}>
         {tab==='Chats'?<Btn onPress={()=>setSearching(!searching)} style={{backgroundColor:C.paper,width:42,height:42,borderRadius:15,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:19}}>⌕</Text></Btn>:null}
         {tab==='Chats'?<Btn onPress={()=>setAddOpen(true)} style={{backgroundColor:C.green,width:42,height:42,borderRadius:15,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:24,color:'#fff'}}>＋</Text></Btn>:null}
@@ -835,7 +835,7 @@ export default function App() {
         </View>
       </View>)}
     </ScrollView>:null}
-    {tab==='Calls'?<View style={{flex:1,alignItems:'center',justifyContent:'center',padding:32}}><Text style={{fontSize:18,fontWeight:'900',color:C.ink}}>King Chat calls</Text><Text style={{textAlign:'center',color:C.muted,marginTop:8,lineHeight:20}}>Open a direct chat and tap the phone or video icon to invite the other member. Both phones must be online. LiveKit server credentials are required to connect the media stream.</Text></View>:null}
+    {tab==='Calls'?<View style={{flex:1,alignItems:'center',justifyContent:'center',padding:32}}><Text style={{fontSize:18,fontWeight:'900',color:C.ink}}>Guftin calls</Text><Text style={{textAlign:'center',color:C.muted,marginTop:8,lineHeight:20}}>Open a direct chat and tap the phone or video icon to invite the other member. Both phones must be online. LiveKit server credentials are required to connect the media stream.</Text></View>:null}
     {tab==='You'?<ScrollView contentContainerStyle={{padding:22}}>
       <View style={{alignItems:'center',padding:25,backgroundColor:C.paper,borderRadius:22}}>
         <Avatar label={initials(profile?.display_name||session.user.email||'KC')} color={C.green} size={76}/>
@@ -866,7 +866,7 @@ export default function App() {
       <View style={{flex:1,backgroundColor:'#0008',justifyContent:'center',padding:22}}>
         <View style={{backgroundColor:C.white,borderRadius:22,padding:22}}>
           <Text style={{fontSize:20,fontWeight:'900',color:C.ink}}>Add a status</Text>
-          <Text style={{color:C.muted,lineHeight:19,marginTop:7,marginBottom:16}}>Your text status is visible to King Chat contacts for 24 hours.</Text>
+          <Text style={{color:C.muted,lineHeight:19,marginTop:7,marginBottom:16}}>Your text status is visible to Guftin contacts for 24 hours.</Text>
           <TextInput value={statusText} onChangeText={setStatusText} placeholder="What's new?" maxLength={700} multiline style={{backgroundColor:C.paper,borderRadius:14,padding:15,color:C.ink,minHeight:120,textAlignVertical:'top'}}/>
           <Text style={{color:C.muted,fontSize:10,marginTop:7,textAlign:'right'}}>{statusText.length}/700</Text>
           <View style={{flexDirection:'row',justifyContent:'flex-end',gap:10,marginTop:15}}>
@@ -880,7 +880,7 @@ export default function App() {
     <Modal visible={addOpen} transparent animationType="fade" onRequestClose={()=>setAddOpen(false)}>
       <View style={{flex:1,backgroundColor:'#0008',justifyContent:'center',padding:22}}>
         <View style={{backgroundColor:C.white,borderRadius:22,padding:22}}>
-          <Text style={{fontSize:20,fontWeight:'900',color:C.ink}}>Find a King Chat user</Text>
+          <Text style={{fontSize:20,fontWeight:'900',color:C.ink}}>Find a Guftin user</Text>
           <Text style={{color:C.muted,lineHeight:19,marginTop:7,marginBottom:16}}>Search by their exact username. Example: ali_786</Text>
           <TextInput value={contactUsername} onChangeText={v=>setContactUsername(v.toLowerCase().replace(/[^a-z0-9_]/g,''))} autoCapitalize="none" placeholder="Username (without @)" style={{backgroundColor:C.paper,borderRadius:14,padding:15,color:C.ink}}/>
           <View style={{flexDirection:'row',justifyContent:'flex-end',gap:10,marginTop:18}}>
