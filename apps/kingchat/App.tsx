@@ -9,6 +9,7 @@ import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import * as ImagePicker from 'expo-image-picker';
 import { File } from 'expo-file-system';
+import { DeviceIdentity, E2EE_PREFIX, decryptMessageForDevice, encryptMessageForDevices, loadOrCreateDeviceIdentity } from './src/lib/e2ee';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -55,6 +56,8 @@ export default function App() {
   const [statusComposer,setStatusComposer]=useState(false);
   const [statusText,setStatusText]=useState('');
   const [publishingStatus,setPublishingStatus]=useState(false);
+  const [deviceIdentity,setDeviceIdentity]=useState<DeviceIdentity|null>(null);
+  const [e2eeStatus,setE2eeStatus]=useState<'loading'|'ready'|'error'>('loading');
 
   const [authBusy,setAuthBusy]=useState(false);
   const [authMode,setAuthMode]=useState<'login'|'signup'>('signup');
@@ -114,6 +117,31 @@ export default function App() {
     Linking.getInitialURL().then(url=>{if(url) void completeAuthUrl(url);});
     return ()=>{subscription.unsubscribe();linkSub.remove();};
   },[completeAuthUrl]);
+
+  useEffect(()=>{
+    let cancelled=false;
+    if(!session){
+      setDeviceIdentity(null);
+      setE2eeStatus('loading');
+      return;
+    }
+    setE2eeStatus('loading');
+    void loadOrCreateDeviceIdentity(supabase,session.user.id)
+      .then(identity=>{
+        if(!cancelled){
+          setDeviceIdentity(identity);
+          setE2eeStatus('ready');
+        }
+      })
+      .catch(error=>{
+        console.warn('E2EE device setup failed:',error?.message||error);
+        if(!cancelled){
+          setDeviceIdentity(null);
+          setE2eeStatus('error');
+        }
+      });
+    return ()=>{cancelled=true;};
+  },[session]);
 
   const loadProfile=useCallback(async()=>{
     if(!session) return;
@@ -176,8 +204,16 @@ export default function App() {
       const {data,error}=await supabase.storage.from('chat-media').createSignedUrl(attachment_url,60*60*24);
       attachment_url=error?null:(data?.signedUrl||null);
     }
-    return {...raw,attachment_url,mine:raw.sender_id===session?.user?.id};
-  },[session]);
+    let body=raw.body||null;
+    if(typeof body==='string'&&body.startsWith(E2EE_PREFIX)){
+      try{
+        body=deviceIdentity?decryptMessageForDevice(body,deviceIdentity):'🔒 Encrypted message — this device key is not ready.';
+      }catch(e:any){
+        body='🔒 Encrypted message — '+(e?.message||'unable to decrypt on this device.');
+      }
+    }
+    return {...raw,body,attachment_url,mine:raw.sender_id===session?.user?.id};
+  },[session,deviceIdentity]);
 
   useEffect(()=>{
     if(!session){
@@ -232,20 +268,44 @@ export default function App() {
   const sendMessage=async()=>{
     const body=draft.trim();
     if(!body||!active||!session||sending) return;
+    if(!deviceIdentity||e2eeStatus!=='ready'){
+      Alert.alert('Secure chat is not ready','King Chat is still setting up this device encryption key. Check your connection and reopen the app.');
+      return;
+    }
     setSending(true);
     const conversationId=active.id;
-    const {data,error}=await supabase.from('kc_messages').insert({
-      conversation_id:conversationId,sender_id:session.user.id,body,message_type:'text'
-    }).select('id,conversation_id,sender_id,body,message_type,created_at').single();
-    setSending(false);
-    if(error){Alert.alert('Message not sent',error.message);return;}
-    setDraft('');
-    const item:Message={...data,mine:true};
-    setMessages(prev=>{
-      const old=prev[conversationId]||[];
-      return {...prev,[conversationId]:old.some(x=>x.id===item.id)?old:[...old,item]};
-    });
-    void loadInbox();
+    try{
+      const {data:members,error:membersError}=await supabase.from('kc_conversation_members')
+        .select('user_id').eq('conversation_id',conversationId);
+      if(membersError)throw membersError;
+      const memberIds=[...new Set((members||[]).map((row:any)=>row.user_id))] as string[];
+      if(!memberIds.includes(session.user.id))throw new Error('You are no longer a member of this conversation.');
+
+      const {data:devices,error:devicesError}=await supabase.from('kc_e2ee_devices')
+        .select('id,user_id,public_key').in('user_id',memberIds).is('revoked_at',null);
+      if(devicesError)throw devicesError;
+      const registeredUsers=new Set((devices||[]).map((device:any)=>device.user_id));
+      const missingUsers=memberIds.filter(id=>!registeredUsers.has(id));
+      if(missingUsers.length){
+        throw new Error('A conversation member has not registered an encryption device yet. Ask them to update and open King Chat before sending secure messages.');
+      }
+      const encryptedBody=encryptMessageForDevices(body,devices||[],deviceIdentity);
+      const {data,error}=await supabase.from('kc_messages').insert({
+        conversation_id:conversationId,sender_id:session.user.id,body:encryptedBody,message_type:'text'
+      }).select('id,conversation_id,sender_id,message_type,created_at').single();
+      if(error)throw error;
+      setDraft('');
+      const item:Message={...data,body,mine:true};
+      setMessages(prev=>{
+        const old=prev[conversationId]||[];
+        return {...prev,[conversationId]:old.some(x=>x.id===item.id)?old:[...old,item]};
+      });
+      void loadInbox();
+    }catch(e:any){
+      Alert.alert('Secure message not sent',e?.message||'Please try again.');
+    }finally{
+      setSending(false);
+    }
   };
 
   const sendMedia=async()=>{
@@ -510,7 +570,7 @@ export default function App() {
         <Avatar label={active.avatar} color={active.color} size={43} online={active.online}/>
         <View style={{flex:1,marginLeft:11}}>
           <Text style={{fontWeight:'900',fontSize:15,color:C.ink}}>{active.name}</Text>
-          <Text style={{fontSize:11,color:active.online?C.green:C.muted}}>{active.online?'● online':'King Chat'}</Text>
+          <Text style={{fontSize:11,color:e2eeStatus==='ready'?C.green:C.muted}}>{active.online?'● online · ':''}{e2eeStatus==='ready'?'🔒 End-to-end encryption':'Setting up secure chat…'}</Text>
         </View>
         <Btn onPress={()=>Alert.alert('Voice calls','Live calling is not enabled in this version yet.')} style={{padding:9}}><Text style={{fontSize:20}}>☎</Text></Btn>
         <Btn onPress={()=>Alert.alert('Video calls','Video calling requires a WebRTC calling service and signaling infrastructure.')} style={{padding:9}}><Text style={{fontSize:20}}>▣</Text></Btn>
@@ -589,7 +649,12 @@ export default function App() {
       <Text style={{fontWeight:'800',color:C.ink,marginTop:15,marginBottom:8}}>About</Text>
       <TextInput value={about} onChangeText={setAbout} placeholder="A little about you" maxLength={160} multiline style={{backgroundColor:C.paper,borderRadius:14,padding:15,color:C.ink,minHeight:75,textAlignVertical:'top'}}/>
       <Btn disabled={savingProfile} onPress={saveProfile} style={{backgroundColor:C.green,padding:15,borderRadius:14,alignItems:'center',marginTop:10}}>{savingProfile?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'800'}}>Save profile</Text>}</Btn>
-      <Btn onPress={()=>Alert.alert('Privacy','Your profile exposes your username and display name to people you chat with. Email addresses are not displayed in public contact search. End-to-end encryption is not implemented in this release.')} style={{padding:18,borderBottomWidth:1,borderColor:C.line,marginTop:12}}><Text style={{color:C.ink,fontWeight:'700'}}>Privacy and security　›</Text></Btn>
+      <View style={{padding:15,backgroundColor:C.mint,borderRadius:14,marginTop:18}}>
+        <Text style={{fontWeight:'900',color:C.green}}>🔒 Message encryption</Text>
+        <Text style={{color:C.ink,fontSize:12,lineHeight:18,marginTop:6}}>{e2eeStatus==='ready'?'This device has a private key stored locally. New text messages are encrypted for each registered conversation device before upload.':'This device encryption key is not available yet. Secure text sending is paused.'}</Text>
+        <Text style={{color:C.muted,fontSize:10,lineHeight:15,marginTop:6}}>This initial version does not yet provide forward secrecy, verified safety numbers, encrypted media/status, or automatic key recovery after reinstalling Android.</Text>
+      </View>
+      <Btn onPress={()=>Alert.alert('Privacy','New text-message contents are encrypted on this device before being stored. Media and statuses are not yet end-to-end encrypted. The current key exchange has not had an independent security audit and does not provide forward secrecy.')} style={{padding:18,borderBottomWidth:1,borderColor:C.line,marginTop:12}}><Text style={{color:C.ink,fontWeight:'700'}}>Privacy and security　›</Text></Btn>
       <Btn onPress={()=>supabase.auth.signOut()} style={{padding:18}}><Text style={{color:C.red,fontWeight:'800'}}>Sign out</Text></Btn>
     </ScrollView>:null}
     <View style={{height:69,borderTopWidth:1,borderColor:C.line,flexDirection:'row',alignItems:'center',justifyContent:'space-around',backgroundColor:C.white}}>
