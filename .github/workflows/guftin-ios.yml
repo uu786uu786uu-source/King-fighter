@@ -35,7 +35,7 @@ jobs:
       - name: Build iOS Simulator app
         shell: bash
         run: |
-          WORKSPACE="$(find ios -maxdepth 3 -name '*.xcworkspace' -print -quit)"
+          WORKSPACE="$(find ios -maxdepth 2 -type d -name '*.xcworkspace' -print -quit)"
           if [ -z "$WORKSPACE" ]; then
             echo "Expo did not generate an iOS workspace."
             exit 1
