@@ -87,6 +87,11 @@ export default function App() {
   const [chats,setChats]=useState<Chat[]>([]);
   const [active,setActive]=useState<Chat|null>(null);
   const [messages,setMessages]=useState<Record<string,Message[]>>({});
+  const [peerLastReadAt,setPeerLastReadAt]=useState<string|null>(null);
+  const activeConversationIdRef=useRef<string|null>(null);
+  useEffect(()=>{
+    activeConversationIdRef.current=active?.id||null;
+  },[active?.id]);
   const [draft,setDraft]=useState('');
   const [search,setSearch]=useState('');
   const [searching,setSearching]=useState(false);
@@ -207,14 +212,14 @@ export default function App() {
     setLoading(true);
     try{
       const {data:memberships,error}=await supabase.from('kc_conversation_members')
-        .select('conversation_id,joined_at,conversation:kc_conversations!inner(id,kind,title,updated_at)')
+        .select('conversation_id,joined_at,last_read_at,conversation:kc_conversations!inner(id,kind,title,updated_at)')
         .eq('user_id',session.user.id);
       if(error) throw error;
       const rows=(memberships||[]) as any[];
       const ids=rows.map(r=>r.conversation_id).filter(Boolean);
       if(ids.length===0){setChats([]);return;}
       const [memberResult,profileResult,messageResult]=await Promise.all([
-        supabase.from('kc_conversation_members').select('conversation_id,user_id').in('conversation_id',ids),
+        supabase.from('kc_conversation_members').select('conversation_id,user_id,last_read_at,joined_at').in('conversation_id',ids),
         supabase.from('kc_profiles').select('id,display_name,avatar_url,is_online').neq('id',session.user.id),
         supabase.from('kc_messages').select('id,conversation_id,sender_id,body,message_type,created_at')
           .in('conversation_id',ids).is('deleted_at',null).order('created_at',{ascending:false}).limit(500)
@@ -233,6 +238,15 @@ export default function App() {
         const peer=peers.length?profileMap.get(peers[0].user_id):null;
         const name=conv.kind==='group'?(conv.title||'Group chat'):(peer?.display_name||'Guftin member');
         const last=latest.get(row.conversation_id);
+        const readThrough=Math.max(
+          row.last_read_at?new Date(row.last_read_at).getTime():0,
+          row.joined_at?new Date(row.joined_at).getTime():0
+        );
+        const unread=(messageResult.data||[]).filter((message:any)=>
+          message.conversation_id===row.conversation_id &&
+          message.sender_id!==session.user.id &&
+          new Date(message.created_at).getTime()>readThrough
+        ).length;
         let preview='No messages yet';
         if(last){
           if(last.message_type==='image')preview='Photo';
@@ -244,7 +258,7 @@ export default function App() {
           }else preview=last.body||'Attachment';
         }
         return {id:row.conversation_id,name,avatar:initials(name),color:colorFor(name),last:preview,
-          time:last?timeLabel(last.created_at):'',unread:0,online:!!peer?.is_online,kind:conv.kind||'direct',
+          time:last?timeLabel(last.created_at):'',unread,online:!!peer?.is_online,kind:conv.kind||'direct',
           lastAt:last?new Date(last.created_at).getTime():new Date(conv.updated_at||row.joined_at).getTime()};
       }).sort((a,b)=>b.lastAt-a.lastAt);
       setChats(mapped);
@@ -339,6 +353,16 @@ export default function App() {
           const old=prev[m.conversation_id]||[];
           return {...prev,[m.conversation_id]:old.some(x=>x.id===m.id)?old:[...old,item]};
         });
+        if(activeConversationIdRef.current===m.conversation_id && m.sender_id!==session.user.id){
+          void supabase.rpc('kc_mark_conversation_read',{p_conversation_id:m.conversation_id});
+        }
+        void loadInbox();
+      })
+      .on('postgres_changes',{event:'UPDATE',schema:'public',table:'kc_conversation_members'},payload=>{
+        const member=payload.new as any;
+        if(member.conversation_id===activeConversationIdRef.current && member.user_id!==session.user.id){
+          setPeerLastReadAt(member.last_read_at||null);
+        }
         void loadInbox();
       })
       .on('postgres_changes',{event:'*',schema:'public',table:'kc_call_logs'},payload=>{
@@ -382,7 +406,18 @@ export default function App() {
     if(error){Alert.alert('Messages could not load',error.message);return;}
     const resolved=await Promise.all((data||[]).map((m:any)=>resolveMessage(m)));
     setMessages(prev=>({...prev,[conversationId]:resolved}));
-  },[session,resolveMessage]);
+    const [{data:memberRows,error:memberError},{error:readError}]=await Promise.all([
+      supabase.from('kc_conversation_members')
+        .select('user_id,last_read_at')
+        .eq('conversation_id',conversationId),
+      supabase.rpc('kc_mark_conversation_read',{p_conversation_id:conversationId})
+    ]);
+    if(memberError)console.warn('Read receipt roster:',memberError.message);
+    if(readError)console.warn('Could not mark conversation as read:',readError.message);
+    const peer=(memberRows||[]).find((member:any)=>member.user_id!==session.user.id);
+    setPeerLastReadAt(peer?.last_read_at||null);
+    if(!readError)void loadInbox();
+  },[session,resolveMessage,loadInbox]);
 
   useEffect(()=>{
     if(session&&deviceIdentity&&active)void loadMessages(active.id);
@@ -395,6 +430,7 @@ export default function App() {
   };
 
   const openChat=async(chat:Chat)=>{
+    setPeerLastReadAt(null);
     setActive(chat);
     await loadMessages(chat.id);
   };
@@ -780,7 +816,9 @@ export default function App() {
         ListEmptyComponent={<Text style={{textAlign:'center',color:C.muted}}>No messages yet. Send the first message.</Text>}
         renderItem={({item})=><View style={{alignSelf:item.mine?'flex-end':'flex-start',maxWidth:'84%',backgroundColor:item.mine?'#dff4e8':C.white,padding:13,borderRadius:17,borderTopRightRadius:item.mine?5:17,borderTopLeftRadius:item.mine?17:5}}>
           {item.message_type==='image'&&item.attachment_url?<Image source={{uri:item.attachment_url}} style={{width:210,height:210,borderRadius:12}} resizeMode="cover"/>:item.message_type==='video'&&item.attachment_url?<VideoBubble uri={item.attachment_url}/>:<Text style={{color:C.ink,fontSize:14,lineHeight:21}}>{item.body||'Attachment'}</Text>}
-          <Text style={{textAlign:'right',fontSize:9,color:C.muted,marginTop:5}}>{timeLabel(item.created_at)}</Text>
+          <Text style={{textAlign:'right',fontSize:9,color:C.muted,marginTop:5}}>
+            {timeLabel(item.created_at)}{item.mine ? " · " + (peerLastReadAt && new Date(peerLastReadAt).getTime() >= new Date(item.created_at).getTime() ? "✓✓ Seen" : "✓ Sent") : ""}
+          </Text>
         </View>}/>
       <KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':undefined}>
         <View style={{flexDirection:'row',alignItems:'center',padding:11,gap:8,backgroundColor:C.white}}>
@@ -812,7 +850,12 @@ export default function App() {
             <Avatar label={item.avatar} color={item.color} online={item.online}/>
             <View style={{flex:1,borderBottomWidth:1,borderColor:C.line,paddingBottom:14,paddingTop:2}}>
               <View style={{flexDirection:'row',justifyContent:'space-between'}}><Text style={{fontWeight:'800',color:C.ink,fontSize:14}}>{item.name}</Text><Text style={{fontSize:10,color:C.muted}}>{item.time}</Text></View>
-              <Text numberOfLines={1} style={{fontSize:12,color:C.muted,marginTop:6}}>{item.last}</Text>
+              <View style={{flexDirection:'row',alignItems:'center',gap:8,marginTop:6}}>
+                <Text numberOfLines={1} style={{fontSize:12,color:C.muted,flex:1}}>{item.last}</Text>
+                {item.unread>0?<View style={{minWidth:20,height:20,paddingHorizontal:6,borderRadius:10,backgroundColor:C.green,alignItems:'center',justifyContent:'center'}}>
+                  <Text style={{fontSize:10,color:'#fff',fontWeight:'900'}}>{item.unread>99?'99+':item.unread}</Text>
+                </View>:null}
+              </View>
             </View>
           </Btn>}/>
       }
