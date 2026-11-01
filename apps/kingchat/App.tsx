@@ -385,7 +385,7 @@ export default function App() {
           const old=prev[m.conversation_id]||[];
           return {...prev,[m.conversation_id]:old.some(x=>x.id===m.id)?old:[...old,item]};
         });
-        if(activeConversationIdRef.current===m.conversation_id && m.sender_id!==session.user.id){
+        if(showReadReceipts&&activeConversationIdRef.current===m.conversation_id && m.sender_id!==session.user.id){
           void supabase.rpc('kc_mark_conversation_read',{p_conversation_id:m.conversation_id});
         }
         void loadInbox();
@@ -429,7 +429,7 @@ export default function App() {
       setIncomingCall(null);setOutgoingCall(null);setLiveCall(null);
       void supabase.from('kc_profiles').update({is_online:false,last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
     };
-  },[session,loadProfile,loadInbox,resolveMessage,joinCall,respondToCall,onlineVisibility,autoSync,syncIntervalSeconds]);
+  },[session,loadProfile,loadInbox,resolveMessage,joinCall,respondToCall,onlineVisibility,autoSync,syncIntervalSeconds,showReadReceipts]);
 
   const loadMessages=useCallback(async(conversationId:string)=>{
     if(!session) return;
@@ -444,14 +444,14 @@ export default function App() {
       supabase.from('kc_conversation_members')
         .select('user_id,last_read_at')
         .eq('conversation_id',conversationId),
-      supabase.rpc('kc_mark_conversation_read',{p_conversation_id:conversationId})
+      showReadReceipts?supabase.rpc('kc_mark_conversation_read',{p_conversation_id:conversationId}):Promise.resolve({error:null})
     ]);
     if(memberError)console.warn('Read receipt roster:',memberError.message);
     if(readError)console.warn('Could not mark conversation as read:',readError.message);
     const peer=(memberRows||[]).find((member:any)=>member.user_id!==session.user.id);
     setPeerLastReadAt(peer?.last_read_at||null);
     if(!readError)void loadInbox();
-  },[session,resolveMessage,loadInbox]);
+  },[session,resolveMessage,loadInbox,showReadReceipts]);
   loadMessagesRef.current=loadMessages;
 
   useEffect(()=>{
@@ -908,13 +908,13 @@ export default function App() {
       <StatusBar barStyle="dark-content"/>
       <View style={{height:72,backgroundColor:C.white,flexDirection:'row',alignItems:'center',paddingHorizontal:15,borderBottomWidth:1,borderColor:C.line}}>
         <Btn onPress={()=>setActive(null)} style={{padding:10}}><Text style={{fontSize:24,color:C.ink}}>‹</Text></Btn>
-        <Avatar label={active.avatar} color={active.color} size={43} online={active.online}/>
+        <Avatar label={active.avatar} color={active.color} size={43} online={active.online} uri={active.avatarUrl}/>
         <View style={{flex:1,marginLeft:11}}>
           <Text style={{fontWeight:'900',fontSize:15,color:C.ink}}>{active.name}</Text>
           <Text style={{fontSize:11,color:e2eeStatus==='ready'?C.green:C.muted}}>{active.online?'● online · ':''}{outgoingCall?'Calling…':e2eeStatus==='ready'?'🔒 Encrypted text & media · unverified keys':'Setting up secure chat…'}</Text>
         </View>
-        <Btn disabled={callBusy||!!outgoingCall} onPress={()=>void startCall('voice')} style={{padding:9,opacity:callBusy?0.5:1}}><Text style={{fontSize:20}}>☎</Text></Btn>
-        <Btn disabled={callBusy||!!outgoingCall} onPress={()=>void startCall('video')} style={{padding:9,opacity:callBusy?0.5:1}}><Text style={{fontSize:20}}>▣</Text></Btn>
+        <Btn disabled={callBusy||!!outgoingCall} onPress={()=>void startCall('voice')} style={{backgroundColor:C.mint,borderRadius:13,paddingHorizontal:10,paddingVertical:8,alignItems:'center',opacity:callBusy?0.5:1}}><Text style={{fontSize:17,color:C.green}}>☎</Text><Text style={{fontSize:9,fontWeight:'800',color:C.green}}>Voice</Text></Btn>
+        <Btn disabled={callBusy||!!outgoingCall} onPress={()=>void startCall('video')} style={{backgroundColor:C.mint,borderRadius:13,paddingHorizontal:10,paddingVertical:8,alignItems:'center',opacity:callBusy?0.5:1}}><Text style={{fontSize:17,color:C.green}}>▣</Text><Text style={{fontSize:9,fontWeight:'800',color:C.green}}>Video</Text></Btn>
       </View>
       <FlatList data={list} keyExtractor={m=>m.id} contentContainerStyle={{padding:18,gap:12,flexGrow:1,justifyContent:list.length?'flex-end':'center'}}
         ListEmptyComponent={<Text style={{textAlign:'center',color:C.muted}}>No messages yet. Send the first message.</Text>}
