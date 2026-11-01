@@ -10,7 +10,7 @@ import * as WebBrowser from 'expo-web-browser';
 import * as ImagePicker from 'expo-image-picker';
 import { File, Paths } from 'expo-file-system';
 import { VideoView, useVideoPlayer } from 'expo-video';
-import * as Crypto from 'expo-crypto';
+import * as ExpoCrypto from 'expo-crypto';
 import { DeviceIdentity, E2EE_MEDIA_PREFIX, E2EE_PREFIX, decryptMediaForDevice, decryptMessageForDevice, encryptMediaForDevices, encryptMessageForDevices, loadOrCreateDeviceIdentity } from './src/lib/e2ee';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -390,7 +390,7 @@ export default function App() {
         plainBytes,devices||[],deviceIdentity,contentType,asset.fileName||('attachment.'+(messageType==='video'?'mp4':'jpg'))
       );
       plainBytes.fill(0);
-      const objectPath=session.user.id+'/'+active.id+'/'+Date.now()+'_'+Crypto.randomUUID()+'.enc';
+      const objectPath=session.user.id+'/'+active.id+'/'+Date.now()+'_'+ExpoCrypto.randomUUID()+'.enc';
       const {error:uploadError}=await supabase.storage.from('chat-media').upload(objectPath,encrypted.ciphertext,{
         contentType:'application/octet-stream',cacheControl:'3600',upsert:false
       });
