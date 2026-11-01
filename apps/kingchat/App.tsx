@@ -20,7 +20,7 @@ WebBrowser.maybeCompleteAuthSession();
 registerGlobals();
 
 const C = { ink:'#102b27', muted:'#82938e', green:'#087e6c', mint:'#e5f5ee', paper:'#f5f8f6', white:'#fff', line:'#e9efec', red:'#b94e48' };
-type Chat = { id:string; name:string; avatar:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number };
+type Chat = { id:string; name:string; avatar:string; avatarUrl?:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number };
 type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; attachment_url?:string|null; created_at:string; mine:boolean };
 const AUTH_REDIRECT_URL = 'kingchat://auth/callback';
 const palette = ['#d49a91','#8796c7','#81ad98','#bd8aa8','#c4a47c','#9a91bd'];
@@ -124,6 +124,10 @@ export default function App() {
   const [showReadReceipts,setShowReadReceipts]=useState(true);
   const [mediaAutoDownload,setMediaAutoDownload]=useState(false);
   const [onlineVisibility,setOnlineVisibility]=useState(true);
+  const [autoSync,setAutoSync]=useState(true);
+  const [syncIntervalSeconds,setSyncIntervalSeconds]=useState(8);
+  const [settingsOpen,setSettingsOpen]=useState(false);
+  const [showReadReceipts,setShowReadReceipts]=useState(true);
   const [publishingStatus,setPublishingStatus]=useState(false);
   const [deviceIdentity,setDeviceIdentity]=useState<DeviceIdentity|null>(null);
   const [e2eeStatus,setE2eeStatus]=useState<'loading'|'ready'|'error'>('loading');
@@ -416,7 +420,7 @@ export default function App() {
           setLiveCall((old:any)=>old?.id===call.id?null:old);
         }
       }).subscribe();
-    const syncTimer=setInterval(()=>{if(AppState.currentState==='active'){void loadInbox();if(activeConversationIdRef.current)void loadMessages(activeConversationIdRef.current);}},8000);
+    const syncTimer=setInterval(()=>{if(autoSync&&AppState.currentState==='active'){void loadInbox();if(activeConversationIdRef.current)void loadMessages(activeConversationIdRef.current);}},syncIntervalSeconds*1000);
     return ()=>{
       clearInterval(syncTimer);
       appState.remove();
@@ -424,7 +428,7 @@ export default function App() {
       setIncomingCall(null);setOutgoingCall(null);setLiveCall(null);
       void supabase.from('kc_profiles').update({is_online:false,last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
     };
-  },[session,loadProfile,loadInbox,loadMessages,resolveMessage,joinCall,respondToCall,onlineVisibility]);
+  },[session,loadProfile,loadInbox,loadMessages,resolveMessage,joinCall,respondToCall,onlineVisibility,autoSync,syncIntervalSeconds]);
 
   const loadMessages=useCallback(async(conversationId:string)=>{
     if(!session) return;
@@ -915,7 +919,7 @@ export default function App() {
         renderItem={({item})=><View style={{alignSelf:item.mine?'flex-end':'flex-start',maxWidth:'84%',backgroundColor:item.mine?'#dff4e8':C.white,padding:13,borderRadius:17,borderTopRightRadius:item.mine?5:17,borderTopLeftRadius:item.mine?17:5}}>
           {item.message_type==='image'&&item.attachment_url?<Image source={{uri:item.attachment_url}} style={{width:210,height:210,borderRadius:12}} resizeMode="cover"/>:item.message_type==='video'&&item.attachment_url?<VideoBubble uri={item.attachment_url}/>:item.message_type==='audio'&&item.attachment_url?<AudioBubble uri={item.attachment_url}/>:<Text style={{color:C.ink,fontSize:14,lineHeight:21}}>{item.body||'Attachment'}</Text>}
           <Text style={{textAlign:'right',fontSize:9,color:C.muted,marginTop:5}}>
-            {timeLabel(item.created_at)}{item.mine ? " · " + (peerLastReadAt && new Date(peerLastReadAt).getTime() >= new Date(item.created_at).getTime() ? "✓✓ Seen" : "✓ Sent") : ""}
+            {timeLabel(item.created_at)}{item.mine ? " · " + (showReadReceipts && peerLastReadAt && new Date(peerLastReadAt).getTime() >= new Date(item.created_at).getTime() ? "✓✓ Seen" : "✓ Sent") : ""}
           </Text>
         </View>}/>
       <KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':undefined}>
@@ -936,6 +940,7 @@ export default function App() {
     <View style={{paddingHorizontal:22,paddingTop:10,paddingBottom:15,flexDirection:'row',alignItems:'center',justifyContent:'space-between'}}>
       <View><Heading>{pageTitle}</Heading><Text style={{color:C.muted,fontSize:12,marginTop:4}}>{tab==='Chats'?'Your real conversations':tab==='You'?'Your Guftin ID':'Guftin'}</Text></View>
       <View style={{flexDirection:'row',gap:9}}>
+        <Btn onPress={()=>setSettingsOpen(true)} style={{backgroundColor:C.paper,width:42,height:42,borderRadius:15,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:19,color:C.green}}>⚙</Text></Btn>
         {tab==='Chats'?<Btn onPress={()=>setSearching(!searching)} style={{backgroundColor:C.paper,width:42,height:42,borderRadius:15,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:19}}>⌕</Text></Btn>:null}
         {tab==='Chats'?<Btn onPress={()=>setAddOpen(true)} style={{backgroundColor:C.green,width:42,height:42,borderRadius:15,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:24,color:'#fff'}}>＋</Text></Btn>:null}
       </View>
@@ -946,7 +951,7 @@ export default function App() {
         <FlatList data={visible} keyExtractor={x=>x.id} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={C.green}/>} contentContainerStyle={{paddingHorizontal:13,paddingBottom:25,flexGrow:1}}
           ListEmptyComponent={<View style={{alignItems:'center',padding:35,marginTop:50}}><Avatar label="K" color={C.green} size={64}/><Text style={{fontSize:17,fontWeight:'900',color:C.ink,marginTop:15}}>No conversations yet</Text><Text style={{color:C.muted,textAlign:'center',marginTop:7,lineHeight:20}}>Tap ＋ and search by a person's unique username to start a real chat.</Text><Btn onPress={()=>setAddOpen(true)} style={{backgroundColor:C.green,paddingHorizontal:22,paddingVertical:13,borderRadius:14,marginTop:18}}><Text style={{color:'#fff',fontWeight:'800'}}>Find by username</Text></Btn></View>}
           renderItem={({item})=><Btn onPress={()=>openChat(item)} style={{flexDirection:'row',alignItems:'center',padding:10,gap:12,borderRadius:17}}>
-            <Avatar label={item.avatar} color={item.color} online={item.online}/>
+            <Avatar label={item.avatar} color={item.color} online={item.online} uri={item.avatarUrl}/>
             <View style={{flex:1,borderBottomWidth:1,borderColor:C.line,paddingBottom:14,paddingTop:2}}>
               <View style={{flexDirection:'row',justifyContent:'space-between'}}><Text style={{fontWeight:'800',color:C.ink,fontSize:14}}>{item.name}</Text><Text style={{fontSize:10,color:C.muted}}>{item.time}</Text></View>
               <View style={{flexDirection:'row',alignItems:'center',gap:8,marginTop:6}}>
@@ -1004,6 +1009,18 @@ export default function App() {
     <View style={{height:69,borderTopWidth:1,borderColor:C.line,flexDirection:'row',alignItems:'center',justifyContent:'space-around',backgroundColor:C.white}}>
       {([['Chats','▤'],['Updates','◉'],['Calls','⌕'],['You','●']] as string[][]).map(([t,icon])=><Btn key={t} onPress={()=>setTab(t)} style={{alignItems:'center',minWidth:64}}><Text style={{fontSize:19,color:tab===t?C.green:C.muted}}>{icon}</Text><Text style={{fontSize:10,fontWeight:tab===t?'900':'600',color:tab===t?C.green:C.muted,marginTop:3}}>{t}</Text></Btn>)}
     </View>
+
+    <Modal visible={settingsOpen} transparent animationType="slide" onRequestClose={()=>setSettingsOpen(false)}>
+      <View style={{flex:1,backgroundColor:'#0008',justifyContent:'flex-end'}}><View style={{backgroundColor:C.white,borderTopLeftRadius:24,borderTopRightRadius:24,padding:22}}>
+        <Text style={{fontSize:21,fontWeight:'900',color:C.ink}}>Guftin settings</Text>
+        <Text style={{color:C.muted,fontSize:12,marginTop:5,marginBottom:15}}>Privacy and connection preferences</Text>
+        <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Show online status</Text><Text style={{color:C.muted,fontSize:11}}>Let contacts see when you are online</Text></View><Switch value={onlineVisibility} onValueChange={setOnlineVisibility} trackColor={{true:C.green}}/></View>
+        <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Read receipts</Text><Text style={{color:C.muted,fontSize:11}}>Show seen status on messages</Text></View><Switch value={showReadReceipts} onValueChange={setShowReadReceipts} trackColor={{true:C.green}}/></View>
+        <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Automatic message sync</Text><Text style={{color:C.muted,fontSize:11}}>Refresh while Guftin is open</Text></View><Switch value={autoSync} onValueChange={setAutoSync} trackColor={{true:C.green}}/></View>
+        <Text style={{color:C.ink,fontWeight:'800',marginTop:10}}>Sync interval</Text><View style={{flexDirection:'row',gap:8,marginTop:10}}>{[8,15,30].map(seconds=><Btn key={seconds} onPress={()=>setSyncIntervalSeconds(seconds)} style={{flex:1,padding:12,borderRadius:12,backgroundColor:syncIntervalSeconds===seconds?C.green:C.paper,alignItems:'center'}}><Text style={{color:syncIntervalSeconds===seconds?'#fff':C.ink,fontWeight:'800'}}>{seconds}s</Text></Btn>)}</View>
+        <Btn onPress={()=>setSettingsOpen(false)} style={{backgroundColor:C.green,padding:15,borderRadius:14,alignItems:'center',marginTop:20}}><Text style={{color:'#fff',fontWeight:'900'}}>Done</Text></Btn>
+      </View></View>
+    </Modal>
 
     <Modal visible={statusComposer} transparent animationType="fade" onRequestClose={()=>setStatusComposer(false)}>
       <View style={{flex:1,backgroundColor:'#0008',justifyContent:'center',padding:22}}>
