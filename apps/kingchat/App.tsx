@@ -127,8 +127,6 @@ export default function App() {
   const [onlineVisibility,setOnlineVisibility]=useState(true);
   const [autoSync,setAutoSync]=useState(true);
   const [syncIntervalSeconds,setSyncIntervalSeconds]=useState(8);
-  const [settingsOpen,setSettingsOpen]=useState(false);
-  const [showReadReceipts,setShowReadReceipts]=useState(true);
   const [publishingStatus,setPublishingStatus]=useState(false);
   const [deviceIdentity,setDeviceIdentity]=useState<DeviceIdentity|null>(null);
   const [e2eeStatus,setE2eeStatus]=useState<'loading'|'ready'|'error'>('loading');
