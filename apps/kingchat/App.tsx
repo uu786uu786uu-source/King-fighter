@@ -1,18 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Alert, AppState, FlatList, KeyboardAvoidingView, Modal,
+  ActivityIndicator, Alert, AppState, FlatList, Image, KeyboardAvoidingView, Modal,
   Platform, RefreshControl, SafeAreaView, ScrollView, StatusBar, Text,
   TextInput, TouchableOpacity, View
 } from 'react-native';
 import { supabase } from './src/lib/supabase';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
+import * as ImagePicker from 'expo-image-picker';
+import { File } from 'expo-file-system';
 
 WebBrowser.maybeCompleteAuthSession();
 
 const C = { ink:'#102b27', muted:'#82938e', green:'#087e6c', mint:'#e5f5ee', paper:'#f5f8f6', white:'#fff', line:'#e9efec', red:'#b94e48' };
 type Chat = { id:string; name:string; avatar:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number };
-type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; created_at:string; mine:boolean };
+type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; attachment_url?:string|null; created_at:string; mine:boolean };
 const AUTH_REDIRECT_URL = 'kingchat://auth/callback';
 const palette = ['#d49a91','#8796c7','#81ad98','#bd8aa8','#c4a47c','#9a91bd'];
 const initials = (s:string) => s.trim().split(/\s+/).slice(0,2).map(x=>x[0]||'').join('').toUpperCase() || 'KC';
@@ -49,6 +51,10 @@ export default function App() {
   const [loading,setLoading]=useState(true);
   const [refreshing,setRefreshing]=useState(false);
   const [sending,setSending]=useState(false);
+  const [statuses,setStatuses]=useState<any[]>([]);
+  const [statusComposer,setStatusComposer]=useState(false);
+  const [statusText,setStatusText]=useState('');
+  const [publishingStatus,setPublishingStatus]=useState(false);
 
   const [authBusy,setAuthBusy]=useState(false);
   const [authMode,setAuthMode]=useState<'login'|'signup'>('signup');
@@ -164,6 +170,15 @@ export default function App() {
     }finally{setLoading(false);}
   },[session]);
 
+  const resolveMessage=useCallback(async(raw:any):Promise<Message>=>{
+    let attachment_url=raw.attachment_url||null;
+    if(attachment_url){
+      const {data,error}=await supabase.storage.from('chat-media').createSignedUrl(attachment_url,60*60*24);
+      attachment_url=error?null:(data?.signedUrl||null);
+    }
+    return {...raw,attachment_url,mine:raw.sender_id===session?.user?.id};
+  },[session]);
+
   useEffect(()=>{
     if(!session){
       setLoading(false);setChats([]);setProfile(null);setProfileReady(false);setActive(null);return;
@@ -176,9 +191,9 @@ export default function App() {
       void supabase.from('kc_profiles').update({is_online:state==='active',last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
     });
     const channel=supabase.channel('kingchat-user-'+session.user.id)
-      .on('postgres_changes',{event:'INSERT',schema:'public',table:'kc_messages'},payload=>{
+      .on('postgres_changes',{event:'INSERT',schema:'public',table:'kc_messages'},async payload=>{
         const m=payload.new as any;
-        const item:Message={...m,mine:m.sender_id===session.user.id};
+        const item=await resolveMessage(m);
         setMessages(prev=>{
           const old=prev[m.conversation_id]||[];
           return {...prev,[m.conversation_id]:old.some(x=>x.id===m.id)?old:[...old,item]};
@@ -190,17 +205,18 @@ export default function App() {
       void supabase.removeChannel(channel);
       void supabase.from('kc_profiles').update({is_online:false,last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
     };
-  },[session,loadProfile,loadInbox]);
+  },[session,loadProfile,loadInbox,resolveMessage]);
 
   const loadMessages=useCallback(async(conversationId:string)=>{
     if(!session) return;
     const {data,error}=await supabase.from('kc_messages')
-      .select('id,conversation_id,sender_id,body,message_type,created_at')
+      .select('id,conversation_id,sender_id,body,message_type,attachment_url,created_at')
       .eq('conversation_id',conversationId).is('deleted_at',null)
       .order('created_at',{ascending:true}).limit(200);
     if(error){Alert.alert('Messages could not load',error.message);return;}
-    setMessages(prev=>({...prev,[conversationId]:(data||[]).map((m:any)=>({...m,mine:m.sender_id===session.user.id}))}));
-  },[session]);
+    const resolved=await Promise.all((data||[]).map((m:any)=>resolveMessage(m)));
+    setMessages(prev=>({...prev,[conversationId]:resolved}));
+  },[session,resolveMessage]);
 
   const refresh=async()=>{
     setRefreshing(true);
@@ -230,6 +246,81 @@ export default function App() {
       return {...prev,[conversationId]:old.some(x=>x.id===item.id)?old:[...old,item]};
     });
     void loadInbox();
+  };
+
+  const sendMedia=async()=>{
+    if(!active||!session||sending)return;
+    try{
+      const result=await ImagePicker.launchImageLibraryAsync({
+        mediaTypes:['images','videos'],
+        allowsEditing:false,
+        quality:0.85,
+        videoMaxDuration:60
+      });
+      if(result.canceled||!result.assets?.length)return;
+      const asset=result.assets[0];
+      const messageType=asset.type==='video'?'video':'image';
+      const file=new File(asset.uri);
+      if(file.size>50*1024*1024){
+        Alert.alert('File too large','This chat currently accepts media up to 50 MB.');
+        return;
+      }
+      const contentType=asset.mimeType||(messageType==='video'?'video/mp4':'image/jpeg');
+      const allowed=['image/jpeg','image/png','image/webp','video/mp4'];
+      if(!allowed.includes(contentType)){
+        Alert.alert('Unsupported format','Please choose a JPG, PNG, WEBP image or MP4 video.');
+        return;
+      }
+      setSending(true);
+      const rawExtension=(asset.fileName?.split('.').pop()|| (messageType==='video'?'mp4':'jpg'));
+      const extension=rawExtension.toLowerCase().replace(/[^a-z0-9]/g,'')||'bin';
+      const objectPath=session.user.id+'/'+active.id+'/'+Date.now()+'_'+Math.random().toString(36).slice(2)+'.'+extension;
+      const bytes=await file.arrayBuffer();
+      const {error:uploadError}=await supabase.storage.from('chat-media').upload(objectPath,bytes,{
+        contentType,cacheControl:'3600',upsert:false
+      });
+      if(uploadError)throw uploadError;
+      const {data,error}=await supabase.from('kc_messages').insert({
+        conversation_id:active.id,sender_id:session.user.id,
+        body:messageType==='video'?'Video':'Photo',
+        message_type:messageType,attachment_url:objectPath
+      }).select('id,conversation_id,sender_id,body,message_type,attachment_url,created_at').single();
+      if(error){
+        await supabase.storage.from('chat-media').remove([objectPath]);
+        throw error;
+      }
+      const item=await resolveMessage(data);
+      setMessages(prev=>{
+        const old=prev[active.id]||[];
+        return {...prev,[active.id]:old.some(x=>x.id===item.id)?old:[...old,item]};
+      });
+      void loadInbox();
+    }catch(e:any){
+      Alert.alert('Media not sent',e?.message||'Please try another image or video.');
+    }finally{
+      setSending(false);
+    }
+  };
+
+  const publishStatus=async()=>{
+    const caption=statusText.trim();
+    if(!session||publishingStatus)return;
+    if(!caption||caption.length>700){
+      Alert.alert('Status text','Write a status between 1 and 700 characters.');
+      return;
+    }
+    setPublishingStatus(true);
+    const {error}=await supabase.from('kc_status_updates').insert({
+      user_id:session.user.id,caption
+    });
+    setPublishingStatus(false);
+    if(error){
+      Alert.alert('Status not posted',error.message);
+      return;
+    }
+    setStatusComposer(false);
+    setStatusText('');
+    await loadStatuses();
   };
 
   const signUpEmail=async()=>{
@@ -327,6 +418,33 @@ export default function App() {
     Alert.alert('Saved','Your King Chat profile has been updated.');
   };
 
+  const loadStatuses=useCallback(async()=>{
+    if(!session)return;
+    const {data,error}=await supabase.from('kc_status_updates')
+      .select('id,user_id,caption,media_url,created_at,expires_at')
+      .gt('expires_at',new Date().toISOString())
+      .order('created_at',{ascending:false}).limit(100);
+    if(error){
+      Alert.alert('Statuses could not load',error.message);
+      return;
+    }
+    const rows=(data||[]) as any[];
+    const ids=[...new Set(rows.map(row=>row.user_id))];
+    if(!ids.length){setStatuses([]);return;}
+    const {data:people}=await supabase.from('kc_profiles')
+      .select('id,display_name,username').in('id',ids);
+    const personMap=new Map((people||[]).map((person:any)=>[person.id,person]));
+    setStatuses(rows.map(row=>({
+      ...row,
+      display_name:(personMap.get(row.user_id) as any)?.display_name||'King Chat member',
+      username:(personMap.get(row.user_id) as any)?.username||''
+    })));
+  },[session]);
+
+  useEffect(()=>{
+    if(tab==='Updates'&&session)void loadStatuses();
+  },[tab,session,loadStatuses]);
+
   const visible=useMemo(()=>chats.filter(c=>c.name.toLowerCase().includes(search.toLowerCase())),[chats,search]);
   const pageTitle=tab==='Chats'?'Messages':tab==='Updates'?'Updates':tab==='Calls'?'Calls':'You';
 
@@ -400,11 +518,12 @@ export default function App() {
       <FlatList data={list} keyExtractor={m=>m.id} contentContainerStyle={{padding:18,gap:12,flexGrow:1,justifyContent:list.length?'flex-end':'center'}}
         ListEmptyComponent={<Text style={{textAlign:'center',color:C.muted}}>No messages yet. Send the first message.</Text>}
         renderItem={({item})=><View style={{alignSelf:item.mine?'flex-end':'flex-start',maxWidth:'84%',backgroundColor:item.mine?'#dff4e8':C.white,padding:13,borderRadius:17,borderTopRightRadius:item.mine?5:17,borderTopLeftRadius:item.mine?17:5}}>
-          <Text style={{color:C.ink,fontSize:14,lineHeight:21}}>{item.body||'Attachment'}</Text>
+          {item.message_type==='image'&&item.attachment_url?<Image source={{uri:item.attachment_url}} style={{width:210,height:210,borderRadius:12}} resizeMode="cover"/>:item.message_type==='video'&&item.attachment_url?<Btn onPress={()=>void Linking.openURL(item.attachment_url!)} style={{paddingVertical:12,paddingHorizontal:16,backgroundColor:'#c6e9d5',borderRadius:10}}><Text style={{color:C.ink,fontWeight:'800'}}>▶ Open video</Text></Btn>:<Text style={{color:C.ink,fontSize:14,lineHeight:21}}>{item.body||'Attachment'}</Text>}
           <Text style={{textAlign:'right',fontSize:9,color:C.muted,marginTop:5}}>{timeLabel(item.created_at)}</Text>
         </View>}/>
       <KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':undefined}>
         <View style={{flexDirection:'row',alignItems:'center',padding:11,gap:8,backgroundColor:C.white}}>
+          <Btn disabled={sending} onPress={sendMedia} style={{width:42,height:42,borderRadius:15,backgroundColor:C.paper,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:23,color:C.green}}>＋</Text></Btn>
           <TextInput value={draft} onChangeText={setDraft} placeholder="Write a message..." multiline maxLength={4000} style={{flex:1,maxHeight:110,backgroundColor:C.paper,borderRadius:16,paddingHorizontal:15,paddingVertical:12,color:C.ink}}/>
           <Btn disabled={!draft.trim()||sending} onPress={sendMessage} style={{backgroundColor:C.green,width:46,height:46,borderRadius:16,alignItems:'center',justifyContent:'center'}}>
             {sending?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontSize:20}}>➤</Text>}
@@ -437,7 +556,24 @@ export default function App() {
           </Btn>}/>
       }
     </>:null}
-    {tab==='Updates'?<View style={{flex:1,alignItems:'center',justifyContent:'center',padding:32}}><Text style={{fontSize:18,fontWeight:'900',color:C.ink}}>No updates yet</Text><Text style={{textAlign:'center',color:C.muted,marginTop:8,lineHeight:20}}>Status publishing and media uploads are not enabled in this release.</Text></View>:null}
+    {tab==='Updates'?<ScrollView contentContainerStyle={{padding:20,paddingBottom:30}}>
+      <View style={{backgroundColor:C.paper,borderRadius:20,padding:18,marginBottom:18}}>
+        <Text style={{fontSize:18,fontWeight:'900',color:C.ink}}>Your status</Text>
+        <Text style={{color:C.muted,fontSize:12,marginTop:5}}>Share a text update. It expires after 24 hours.</Text>
+        <Btn onPress={()=>setStatusComposer(true)} style={{backgroundColor:C.green,padding:14,borderRadius:14,alignItems:'center',marginTop:13}}>
+          <Text style={{color:'#fff',fontWeight:'900'}}>＋ Add status</Text>
+        </Btn>
+      </View>
+      <Text style={{fontSize:16,fontWeight:'900',color:C.ink,marginBottom:10}}>Recent updates</Text>
+      {statuses.length===0?<Text style={{color:C.muted,textAlign:'center',padding:30}}>No active statuses from your contacts yet.</Text>:statuses.map((status:any)=><View key={status.id} style={{padding:14,borderBottomWidth:1,borderColor:C.line,flexDirection:'row',gap:12}}>
+        <Avatar label={initials(status.display_name)} color={colorFor(status.user_id)} size={46}/>
+        <View style={{flex:1}}>
+          <Text style={{fontWeight:'900',color:C.ink}}>{status.user_id===session.user.id?'You':status.display_name}{status.username?'  @'+status.username:''}</Text>
+          <Text style={{color:C.ink,lineHeight:20,marginTop:5}}>{status.caption||'Shared a photo or video'}</Text>
+          <Text style={{color:C.muted,fontSize:10,marginTop:5}}>{timeLabel(status.created_at)}</Text>
+        </View>
+      </View>)}
+    </ScrollView>:null}
     {tab==='Calls'?<View style={{flex:1,alignItems:'center',justifyContent:'center',padding:32}}><Text style={{fontSize:18,fontWeight:'900',color:C.ink}}>Calling is not enabled yet</Text><Text style={{textAlign:'center',color:C.muted,marginTop:8,lineHeight:20}}>Voice and video calls need a WebRTC calling service, signaling and TURN servers.</Text></View>:null}
     {tab==='You'?<ScrollView contentContainerStyle={{padding:22}}>
       <View style={{alignItems:'center',padding:25,backgroundColor:C.paper,borderRadius:22}}>
@@ -459,6 +595,21 @@ export default function App() {
     <View style={{height:69,borderTopWidth:1,borderColor:C.line,flexDirection:'row',alignItems:'center',justifyContent:'space-around',backgroundColor:C.white}}>
       {([['Chats','▤'],['Updates','◉'],['Calls','⌕'],['You','●']] as string[][]).map(([t,icon])=><Btn key={t} onPress={()=>setTab(t)} style={{alignItems:'center',minWidth:64}}><Text style={{fontSize:19,color:tab===t?C.green:C.muted}}>{icon}</Text><Text style={{fontSize:10,fontWeight:tab===t?'900':'600',color:tab===t?C.green:C.muted,marginTop:3}}>{t}</Text></Btn>)}
     </View>
+
+    <Modal visible={statusComposer} transparent animationType="fade" onRequestClose={()=>setStatusComposer(false)}>
+      <View style={{flex:1,backgroundColor:'#0008',justifyContent:'center',padding:22}}>
+        <View style={{backgroundColor:C.white,borderRadius:22,padding:22}}>
+          <Text style={{fontSize:20,fontWeight:'900',color:C.ink}}>Add a status</Text>
+          <Text style={{color:C.muted,lineHeight:19,marginTop:7,marginBottom:16}}>Your text status is visible to King Chat contacts for 24 hours.</Text>
+          <TextInput value={statusText} onChangeText={setStatusText} placeholder="What's new?" maxLength={700} multiline style={{backgroundColor:C.paper,borderRadius:14,padding:15,color:C.ink,minHeight:120,textAlignVertical:'top'}}/>
+          <Text style={{color:C.muted,fontSize:10,marginTop:7,textAlign:'right'}}>{statusText.length}/700</Text>
+          <View style={{flexDirection:'row',justifyContent:'flex-end',gap:10,marginTop:15}}>
+            <Btn onPress={()=>setStatusComposer(false)} style={{padding:13}}><Text style={{color:C.muted,fontWeight:'700'}}>Cancel</Text></Btn>
+            <Btn disabled={publishingStatus||!statusText.trim()} onPress={publishStatus} style={{backgroundColor:C.green,paddingHorizontal:18,paddingVertical:13,borderRadius:13}}>{publishingStatus?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'800'}}>Share status</Text>}</Btn>
+          </View>
+        </View>
+      </View>
+    </Modal>
 
     <Modal visible={addOpen} transparent animationType="fade" onRequestClose={()=>setAddOpen(false)}>
       <View style={{flex:1,backgroundColor:'#0008',justifyContent:'center',padding:22}}>
