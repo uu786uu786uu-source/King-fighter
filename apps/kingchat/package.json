@@ -24,7 +24,12 @@
     "expo-secure-store": "~15.0.8",
     "expo-crypto": "~15.0.9",
     "tweetnacl": "1.0.3",
-    "expo-video": "~3.0.16"
+    "expo-video": "~3.0.16",
+    "@livekit/react-native": "3.1.0",
+    "@livekit/react-native-expo-plugin": "1.1.0",
+    "@livekit/react-native-webrtc": "150.1.1",
+    "@config-plugins/react-native-webrtc": "13.0.0",
+    "livekit-client": "2.23.0"
   },
   "devDependencies": {
     "@types/react": "~19.1.10",
