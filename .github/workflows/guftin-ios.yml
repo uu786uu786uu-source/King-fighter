@@ -1,0 +1,48 @@
+name: Validate Guftin iOS Simulator Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - kingchat/production-demo
+    paths:
+      - "apps/kingchat/**"
+      - ".github/workflows/guftin-ios.yml"
+
+jobs:
+  ios-simulator:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: apps/kingchat
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm install
+      - name: Check TypeScript
+        run: npm run typecheck
+      - name: Generate iOS native project
+        run: npx expo prebuild --platform ios --non-interactive
+      - name: Build iOS Simulator app
+        shell: bash
+        run: |
+          WORKSPACE="$(find ios -maxdepth 3 -name '*.xcworkspace' -print -quit)"
+          if [ -z "$WORKSPACE" ]; then
+            echo "Expo did not generate an iOS workspace."
+            exit 1
+          fi
+          SCHEME="$(basename "$WORKSPACE" .xcworkspace)"
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -sdk iphonesimulator \
+            -configuration Release \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/ios-simulator \
+            CODE_SIGNING_ALLOWED=NO \
+            build
