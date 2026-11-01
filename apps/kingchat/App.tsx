@@ -1,13 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator, Alert, AppState, FlatList, Image, KeyboardAvoidingView, Modal,
-  Platform, RefreshControl, SafeAreaView, ScrollView, StatusBar, Text,
+  Platform, RefreshControl, SafeAreaView, ScrollView, StatusBar, Switch, Text,
   TextInput, TouchableOpacity, View
 } from 'react-native';
 import { supabase } from './src/lib/supabase';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import * as ImagePicker from 'expo-image-picker';
+import { Audio } from 'expo-av';
 import { File, Paths } from 'expo-file-system';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import * as ExpoCrypto from 'expo-crypto';
@@ -35,9 +36,9 @@ const timeLabel = (value:string) => {
 function Btn({children,onPress,style,disabled}:any) {
   return <TouchableOpacity disabled={disabled} onPress={onPress} activeOpacity={.75} style={[style,disabled?{opacity:.55}:null]}>{children}</TouchableOpacity>;
 }
-function Avatar({label,color,size=52,online=false}:any) {
-  return <View style={{width:size,height:size,borderRadius:size*.34,backgroundColor:color,alignItems:'center',justifyContent:'center'}}>
-    <Text style={{color:'#fff',fontWeight:'900',fontSize:size*.25}}>{label}</Text>
+function Avatar({label,color,size=52,online=false,uri}:any) {
+  return <View style={{width:size,height:size,borderRadius:size*.34,backgroundColor:color,alignItems:'center',justifyContent:'center',overflow:'hidden'}}>
+    {uri?<Image source={{uri}} style={{width:size,height:size,borderRadius:size*.34}}/>:<Text style={{color:'#fff',fontWeight:'900',fontSize:size*.25}}>{label}</Text>}
     {online?<View style={{position:'absolute',right:-1,bottom:-1,width:13,height:13,borderRadius:8,backgroundColor:'#29b77e',borderWidth:2,borderColor:C.white}}/>:null}
   </View>;
 }
@@ -101,6 +102,16 @@ export default function App() {
   const [statuses,setStatuses]=useState<any[]>([]);
   const [statusComposer,setStatusComposer]=useState(false);
   const [statusText,setStatusText]=useState('');
+  const [statusAsset,setStatusAsset]=useState<any>(null);
+  const [profileAvatarUrl,setProfileAvatarUrl]=useState('');
+  const [profileAvatarPath,setProfileAvatarPath]=useState('');
+  const [profileUploading,setProfileUploading]=useState(false);
+  const [recording,setRecording]=useState<Audio.Recording|null>(null);
+  const [recordingBusy,setRecordingBusy]=useState(false);
+  const [settingsOpen,setSettingsOpen]=useState(false);
+  const [showReadReceipts,setShowReadReceipts]=useState(true);
+  const [mediaAutoDownload,setMediaAutoDownload]=useState(false);
+  const [onlineVisibility,setOnlineVisibility]=useState(true);
   const [publishingStatus,setPublishingStatus]=useState(false);
   const [deviceIdentity,setDeviceIdentity]=useState<DeviceIdentity|null>(null);
   const [e2eeStatus,setE2eeStatus]=useState<'loading'|'ready'|'error'>('loading');
@@ -204,6 +215,9 @@ export default function App() {
     setProfileName(data?.display_name||session.user.user_metadata?.display_name||'');
     setProfileUsername(data?.username||session.user.user_metadata?.username||'');
     setAbout(data?.about||'');
+    setProfileAvatarPath(data?.avatar_url||'');
+    if(data?.avatar_url){const {data:avatarData}=await supabase.storage.from('chat-media').createSignedUrl(data.avatar_url,60*60*24);setProfileAvatarUrl(avatarData?.signedUrl||'');}
+    else setProfileAvatarUrl('');
     setProfileReady(true);
   },[session]);
 
@@ -343,7 +357,8 @@ export default function App() {
     void loadInbox();
     void supabase.from('kc_profiles').update({is_online:true,last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
     const appState=AppState.addEventListener('change',(state)=>{
-      void supabase.from('kc_profiles').update({is_online:state==='active',last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
+      void supabase.from('kc_profiles').update({is_online:onlineVisibility&&state==='active',last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
+      if(state==='active'){void loadInbox();if(activeConversationIdRef.current)void loadMessages(activeConversationIdRef.current);void loadProfile();}
     });
     const channel=supabase.channel('kingchat-user-'+session.user.id)
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'kc_messages'},async payload=>{
@@ -389,13 +404,15 @@ export default function App() {
           setLiveCall((old:any)=>old?.id===call.id?null:old);
         }
       }).subscribe();
+    const syncTimer=setInterval(()=>{if(AppState.currentState==='active'){void loadInbox();if(activeConversationIdRef.current)void loadMessages(activeConversationIdRef.current);}},8000);
     return ()=>{
+      clearInterval(syncTimer);
       appState.remove();
       void supabase.removeChannel(channel);
       setIncomingCall(null);setOutgoingCall(null);setLiveCall(null);
       void supabase.from('kc_profiles').update({is_online:false,last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
     };
-  },[session,loadProfile,loadInbox,resolveMessage,joinCall,respondToCall]);
+  },[session,loadProfile,loadInbox,loadMessages,resolveMessage,joinCall,respondToCall,onlineVisibility]);
 
   const loadMessages=useCallback(async(conversationId:string)=>{
     if(!session) return;
@@ -695,7 +712,7 @@ export default function App() {
     setSavingProfile(true);
     const {error}=await supabase.rpc('kc_finish_profile',{p_username:cleanUsername,p_display_name:cleanName});
     if(error){setSavingProfile(false);Alert.alert('Profile not saved',error.message);return;}
-    const {error:aboutError}=await supabase.from('kc_profiles').update({about:about.trim().slice(0,160)}).eq('id',session.user.id);
+    const {error:aboutError}=await supabase.from('kc_profiles').update({about:about.trim().slice(0,160),avatar_url:profileAvatarPath||null}).eq('id',session.user.id);
     setSavingProfile(false);
     if(aboutError){Alert.alert('About text not saved',aboutError.message);return;}
     await loadProfile();
