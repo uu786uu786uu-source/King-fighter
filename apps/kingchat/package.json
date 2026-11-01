@@ -23,7 +23,8 @@
     "expo-file-system": "19.0.24",
     "expo-secure-store": "~15.0.8",
     "expo-crypto": "~15.0.9",
-    "tweetnacl": "1.0.3"
+    "tweetnacl": "1.0.3",
+    "expo-video": "~3.0.16"
   },
   "devDependencies": {
     "@types/react": "~19.1.10",
