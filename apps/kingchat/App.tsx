@@ -187,7 +187,16 @@ export default function App() {
         const peer=peers.length?profileMap.get(peers[0].user_id):null;
         const name=conv.kind==='group'?(conv.title||'Group chat'):(peer?.display_name||'King Chat member');
         const last=latest.get(row.conversation_id);
-        const preview=last?(last.message_type==='image'?'Photo':last.message_type==='video'?'Video':last.message_type==='audio'?'Voice message':(last.body||'Attachment')):'No messages yet';
+        let preview='No messages yet';
+        if(last){
+          if(last.message_type==='image')preview='Photo';
+          else if(last.message_type==='video')preview='Video';
+          else if(last.message_type==='audio')preview='Voice message';
+          else if(typeof last.body==='string'&&last.body.startsWith(E2EE_PREFIX)){
+            try{preview=deviceIdentity?decryptMessageForDevice(last.body,deviceIdentity):'🔒 Encrypted message';}
+            catch{preview='🔒 Encrypted message';}
+          }else preview=last.body||'Attachment';
+        }
         return {id:row.conversation_id,name,avatar:initials(name),color:colorFor(name),last:preview,
           time:last?timeLabel(last.created_at):'',unread:0,online:!!peer?.is_online,kind:conv.kind||'direct',
           lastAt:last?new Date(last.created_at).getTime():new Date(conv.updated_at||row.joined_at).getTime()};
@@ -196,7 +205,7 @@ export default function App() {
     }catch(e:any){
       Alert.alert('Inbox could not load',e?.message||'Please check your connection and try again.');
     }finally{setLoading(false);}
-  },[session]);
+  },[session,deviceIdentity]);
 
   const resolveMessage=useCallback(async(raw:any):Promise<Message>=>{
     let attachment_url=raw.attachment_url||null;
