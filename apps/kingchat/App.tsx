@@ -8,8 +8,9 @@ import { supabase } from './src/lib/supabase';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import * as ImagePicker from 'expo-image-picker';
-import { File } from 'expo-file-system';
-import { DeviceIdentity, E2EE_PREFIX, decryptMessageForDevice, encryptMessageForDevices, loadOrCreateDeviceIdentity } from './src/lib/e2ee';
+import { File, Paths } from 'expo-file-system';
+import { VideoView, useVideoPlayer } from 'expo-video';
+import { DeviceIdentity, E2EE_MEDIA_PREFIX, E2EE_PREFIX, decryptMediaForDevice, decryptMessageForDevice, encryptMediaForDevices, encryptMessageForDevices, loadOrCreateDeviceIdentity } from './src/lib/e2ee';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -37,6 +38,10 @@ function Avatar({label,color,size=52,online=false}:any) {
   </View>;
 }
 function Heading({children}:any) { return <Text style={{fontSize:25,fontWeight:'900',color:C.ink,letterSpacing:-.6}}>{children}</Text>; }
+function VideoBubble({uri}:{uri:string}) {
+  const player=useVideoPlayer(uri);
+  return <VideoView player={player} style={{width:230,height:165,borderRadius:12}} nativeControls allowsFullscreen contentFit="contain"/>;
+}
 
 export default function App() {
   const [tab,setTab]=useState('Chats');
@@ -214,7 +219,25 @@ export default function App() {
       attachment_url=error?null:(data?.signedUrl||null);
     }
     let body=raw.body||null;
-    if(typeof body==='string'&&body.startsWith(E2EE_PREFIX)){
+    if(typeof body==='string'&&body.startsWith(E2EE_MEDIA_PREFIX)){
+      try{
+        if(!attachment_url||!deviceIdentity)throw new Error('The local encryption key is not available.');
+        const response=await fetch(attachment_url);
+        if(!response.ok)throw new Error('Encrypted media could not be downloaded.');
+        const encryptedBytes=new Uint8Array(await response.arrayBuffer());
+        const decrypted=decryptMediaForDevice(encryptedBytes,body,deviceIdentity);
+        const safeExtension=(decrypted.fileName.split('.').pop()||'bin').toLowerCase().replace(/[^a-z0-9]/g,'')||'bin';
+        const localFile=new File(Paths.cache,'kc_'+raw.id+'.'+safeExtension);
+        if(localFile.exists)localFile.delete();
+        localFile.create();
+        localFile.write(decrypted.bytes);
+        attachment_url=localFile.uri;
+        body=decrypted.fileName;
+      }catch(e:any){
+        attachment_url=null;
+        body='🔒 Encrypted media — '+(e?.message||'unable to decrypt on this device.');
+      }
+    }else if(typeof body==='string'&&body.startsWith(E2EE_PREFIX)){
       try{
         body=deviceIdentity?decryptMessageForDevice(body,deviceIdentity):'🔒 Encrypted message — this device key is not ready.';
       }catch(e:any){
@@ -319,6 +342,10 @@ export default function App() {
 
   const sendMedia=async()=>{
     if(!active||!session||sending)return;
+    if(!deviceIdentity||e2eeStatus!=='ready'){
+      Alert.alert('Secure media is not ready','King Chat is still setting up this device encryption key.');
+      return;
+    }
     try{
       const result=await ImagePicker.launchImageLibraryAsync({
         mediaTypes:['images','videos'],
@@ -330,8 +357,8 @@ export default function App() {
       const asset=result.assets[0];
       const messageType=asset.type==='video'?'video':'image';
       const file=new File(asset.uri);
-      if(file.size>50*1024*1024){
-        Alert.alert('File too large','This chat currently accepts media up to 50 MB.');
+      if(file.size>20*1024*1024){
+        Alert.alert('File too large','Encrypted media is currently limited to 20 MB per photo or video.');
         return;
       }
       const contentType=asset.mimeType||(messageType==='video'?'video/mp4':'image/jpeg');
@@ -341,31 +368,44 @@ export default function App() {
         return;
       }
       setSending(true);
-      const rawExtension=(asset.fileName?.split('.').pop()|| (messageType==='video'?'mp4':'jpg'));
-      const extension=rawExtension.toLowerCase().replace(/[^a-z0-9]/g,'')||'bin';
-      const objectPath=session.user.id+'/'+active.id+'/'+Date.now()+'_'+Math.random().toString(36).slice(2)+'.'+extension;
-      const bytes=await file.arrayBuffer();
-      const {error:uploadError}=await supabase.storage.from('chat-media').upload(objectPath,bytes,{
-        contentType,cacheControl:'3600',upsert:false
+      const {data:members,error:membersError}=await supabase.from('kc_conversation_members')
+        .select('user_id').eq('conversation_id',active.id);
+      if(membersError)throw membersError;
+      const memberIds=[...new Set((members||[]).map((row:any)=>row.user_id))] as string[];
+      const {data:devices,error:devicesError}=await supabase.from('kc_e2ee_devices')
+        .select('id,user_id,public_key').in('user_id',memberIds).is('revoked_at',null);
+      if(devicesError)throw devicesError;
+      const registeredUsers=new Set((devices||[]).map((device:any)=>device.user_id));
+      if(memberIds.some(id=>!registeredUsers.has(id))){
+        throw new Error('A conversation member must open the latest King Chat build before receiving encrypted media.');
+      }
+
+      const plainBytes=new Uint8Array(await file.arrayBuffer());
+      const encrypted=encryptMediaForDevices(
+        plainBytes,devices||[],deviceIdentity,contentType,asset.fileName||('attachment.'+(messageType==='video'?'mp4':'jpg'))
+      );
+      plainBytes.fill(0);
+      const objectPath=session.user.id+'/'+active.id+'/'+Date.now()+'_'+Crypto.randomUUID()+'.enc';
+      const {error:uploadError}=await supabase.storage.from('chat-media').upload(objectPath,encrypted.ciphertext,{
+        contentType:'application/octet-stream',cacheControl:'3600',upsert:false
       });
       if(uploadError)throw uploadError;
       const {data,error}=await supabase.from('kc_messages').insert({
         conversation_id:active.id,sender_id:session.user.id,
-        body:messageType==='video'?'Video':'Photo',
-        message_type:messageType,attachment_url:objectPath
-      }).select('id,conversation_id,sender_id,body,message_type,attachment_url,created_at').single();
+        body:encrypted.body,message_type:messageType,attachment_url:objectPath
+      }).select('id,conversation_id,sender_id,message_type,created_at').single();
       if(error){
         await supabase.storage.from('chat-media').remove([objectPath]);
         throw error;
       }
-      const item=await resolveMessage(data);
+      const item:Message={...data,body:messageType==='video'?'Video':'Photo',attachment_url:asset.uri,mine:true};
       setMessages(prev=>{
         const old=prev[active.id]||[];
         return {...prev,[active.id]:old.some(x=>x.id===item.id)?old:[...old,item]};
       });
       void loadInbox();
     }catch(e:any){
-      Alert.alert('Media not sent',e?.message||'Please try another image or video.');
+      Alert.alert('Encrypted media not sent',e?.message||'Please try another image or video.');
     }finally{
       setSending(false);
     }
@@ -587,7 +627,7 @@ export default function App() {
       <FlatList data={list} keyExtractor={m=>m.id} contentContainerStyle={{padding:18,gap:12,flexGrow:1,justifyContent:list.length?'flex-end':'center'}}
         ListEmptyComponent={<Text style={{textAlign:'center',color:C.muted}}>No messages yet. Send the first message.</Text>}
         renderItem={({item})=><View style={{alignSelf:item.mine?'flex-end':'flex-start',maxWidth:'84%',backgroundColor:item.mine?'#dff4e8':C.white,padding:13,borderRadius:17,borderTopRightRadius:item.mine?5:17,borderTopLeftRadius:item.mine?17:5}}>
-          {item.message_type==='image'&&item.attachment_url?<Image source={{uri:item.attachment_url}} style={{width:210,height:210,borderRadius:12}} resizeMode="cover"/>:item.message_type==='video'&&item.attachment_url?<Btn onPress={()=>void Linking.openURL(item.attachment_url!)} style={{paddingVertical:12,paddingHorizontal:16,backgroundColor:'#c6e9d5',borderRadius:10}}><Text style={{color:C.ink,fontWeight:'800'}}>▶ Open video</Text></Btn>:<Text style={{color:C.ink,fontSize:14,lineHeight:21}}>{item.body||'Attachment'}</Text>}
+          {item.message_type==='image'&&item.attachment_url?<Image source={{uri:item.attachment_url}} style={{width:210,height:210,borderRadius:12}} resizeMode="cover"/>:item.message_type==='video'&&item.attachment_url?<VideoBubble uri={item.attachment_url}/>:<Text style={{color:C.ink,fontSize:14,lineHeight:21}}>{item.body||'Attachment'}</Text>}
           <Text style={{textAlign:'right',fontSize:9,color:C.muted,marginTop:5}}>{timeLabel(item.created_at)}</Text>
         </View>}/>
       <KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':undefined}>
