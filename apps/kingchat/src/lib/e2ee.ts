@@ -104,6 +104,7 @@ export async function loadOrCreateDeviceIdentity(
     deviceId = data.id;
   }
 
+  if (!deviceId) throw new Error('This device could not be registered for secure messaging.');
   return { deviceId, ...keyData };
 }
 
