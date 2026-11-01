@@ -570,7 +570,7 @@ export default function App() {
         <Avatar label={active.avatar} color={active.color} size={43} online={active.online}/>
         <View style={{flex:1,marginLeft:11}}>
           <Text style={{fontWeight:'900',fontSize:15,color:C.ink}}>{active.name}</Text>
-          <Text style={{fontSize:11,color:e2eeStatus==='ready'?C.green:C.muted}}>{active.online?'● online · ':''}{e2eeStatus==='ready'?'🔒 End-to-end encryption':'Setting up secure chat…'}</Text>
+          <Text style={{fontSize:11,color:e2eeStatus==='ready'?C.green:C.muted}}>{active.online?'● online · ':''}{e2eeStatus==='ready'?'🔒 Text messages encrypted':'Setting up secure chat…'}</Text>
         </View>
         <Btn onPress={()=>Alert.alert('Voice calls','Live calling is not enabled in this version yet.')} style={{padding:9}}><Text style={{fontSize:20}}>☎</Text></Btn>
         <Btn onPress={()=>Alert.alert('Video calls','Video calling requires a WebRTC calling service and signaling infrastructure.')} style={{padding:9}}><Text style={{fontSize:20}}>▣</Text></Btn>
