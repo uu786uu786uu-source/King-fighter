@@ -26,8 +26,12 @@ jobs:
         run: npm install
       - name: Check TypeScript
         run: npm run typecheck
+      - name: Generate Guftin launcher and splash assets
+        run: npm run prepare:assets
       - name: Generate iOS native project
-        run: npx expo prebuild --platform ios --non-interactive
+        env:
+          CI: 1
+        run: npx expo prebuild --platform ios
       - name: Build iOS Simulator app
         shell: bash
         run: |
