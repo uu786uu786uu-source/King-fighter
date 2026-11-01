@@ -10,6 +10,7 @@ import * as WebBrowser from 'expo-web-browser';
 import * as ImagePicker from 'expo-image-picker';
 import { File, Paths } from 'expo-file-system';
 import { VideoView, useVideoPlayer } from 'expo-video';
+import * as Crypto from 'expo-crypto';
 import { DeviceIdentity, E2EE_MEDIA_PREFIX, E2EE_PREFIX, decryptMediaForDevice, decryptMessageForDevice, encryptMediaForDevices, encryptMessageForDevices, loadOrCreateDeviceIdentity } from './src/lib/e2ee';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -274,6 +275,10 @@ export default function App() {
       void supabase.from('kc_profiles').update({is_online:false,last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
     };
   },[session,loadProfile,loadInbox,resolveMessage]);
+
+  useEffect(()=>{
+    if(session&&deviceIdentity&&active)void loadMessages(active.id);
+  },[session?.user?.id,deviceIdentity?.deviceId,active?.id]);
 
   const loadMessages=useCallback(async(conversationId:string)=>{
     if(!session) return;
