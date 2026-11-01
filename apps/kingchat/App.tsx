@@ -75,6 +75,18 @@ function CallRoomScreen({callType,onHangUp}:any) {
     </View>
   </SafeAreaView>;
 }
+function AudioBubble({uri}:{uri:string}) {
+  const [playing,setPlaying]=useState(false);
+  const sound=useRef<Audio.Sound|null>(null);
+  useEffect(()=>()=>{if(sound.current)void sound.current.unloadAsync();},[]);
+  const toggle=async()=>{
+    try{
+      if(!sound.current){const created=await Audio.Sound.createAsync({uri},{shouldPlay:true});sound.current=created.sound;setPlaying(true);created.sound.setOnPlaybackStatusUpdate((status:any)=>{if(status.didJustFinish)setPlaying(false);});}
+      else {const status=await sound.current.getStatusAsync();if(status.isLoaded&&status.isPlaying){await sound.current.pauseAsync();setPlaying(false);}else{await sound.current.playAsync();setPlaying(true);}}
+    }catch(e:any){Alert.alert('Audio playback failed',e?.message||'Could not play this voice message.');}
+  };
+  return <Btn onPress={()=>void toggle()} style={{flexDirection:'row',alignItems:'center',gap:10,minWidth:175,paddingVertical:5}}><Text style={{fontSize:20,color:C.green}}>{playing?'Ⅱ':'▶'}</Text><Text style={{color:C.ink,fontWeight:'800'}}>Voice message</Text></Btn>;
+}
 function VideoBubble({uri}:{uri:string}) {
   const player=useVideoPlayer(uri);
   return <VideoView player={player} style={{width:230,height:165,borderRadius:12}} nativeControls allowsFullscreen contentFit="contain"/>;
@@ -495,6 +507,43 @@ export default function App() {
     }
   };
 
+  const uploadVoiceMessage=async(uri:string)=>{
+    if(!active||!session||!deviceIdentity||e2eeStatus!=='ready')throw new Error('Secure chat is not ready.');
+    const file=new File(uri);if(file.size>20*1024*1024)throw new Error('Voice message is too large.');
+    const {data:members,error:membersError}=await supabase.from('kc_conversation_members').select('user_id').eq('conversation_id',active.id);
+    if(membersError)throw membersError;
+    const memberIds=[...new Set((members||[]).map((row:any)=>row.user_id))] as string[];
+    const {data:devices,error:devicesError}=await supabase.from('kc_e2ee_devices').select('id,user_id,public_key').in('user_id',memberIds).is('revoked_at',null);
+    if(devicesError)throw devicesError;
+    const registeredUsers=new Set((devices||[]).map((device:any)=>device.user_id));
+    if(memberIds.some(id=>!registeredUsers.has(id)))throw new Error('All chat members must open the latest Guftin build first.');
+    const plain=new Uint8Array(await file.arrayBuffer());
+    const encrypted=encryptMediaForDevices(plain,devices||[],deviceIdentity,'audio/mp4','voice-message.m4a');plain.fill(0);
+    const objectPath=session.user.id+'/'+active.id+'/'+Date.now()+'_'+ExpoCrypto.randomUUID()+'.enc';
+    const {error:uploadError}=await supabase.storage.from('chat-media').upload(objectPath,encrypted.ciphertext,{contentType:'application/octet-stream',upsert:false});
+    if(uploadError)throw uploadError;
+    const {data,error}=await supabase.from('kc_messages').insert({conversation_id:active.id,sender_id:session.user.id,body:encrypted.body,message_type:'audio',attachment_url:objectPath}).select('id,conversation_id,sender_id,message_type,attachment_url,created_at').single();
+    if(error){await supabase.storage.from('chat-media').remove([objectPath]);throw error;}
+    const item=await resolveMessage({...data,body:encrypted.body});
+    setMessages(prev=>({...prev,[active.id]:[...(prev[active.id]||[]),item]}));void loadInbox();
+  };
+
+  const startVoiceRecording=async()=>{
+    if(recording||recordingBusy)return;
+    try{
+      const permission=await Audio.requestPermissionsAsync();if(!permission.granted)throw new Error('Microphone permission is required.');
+      await Audio.setAudioModeAsync({allowsRecordingIOS:true,playsInSilentModeIOS:true,shouldDuckAndroid:true,playThroughEarpieceAndroid:false});
+      const next=new Audio.Recording();await next.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);await next.startAsync();setRecording(next);
+    }catch(e:any){Alert.alert('Recording unavailable',e?.message||'Check microphone permission.');}
+  };
+
+  const stopVoiceRecording=async()=>{
+    if(!recording||recordingBusy)return;setRecordingBusy(true);
+    try{await recording.stopAndUnloadAsync();const uri=recording.getURI();setRecording(null);if(uri)await uploadVoiceMessage(uri);await Audio.setAudioModeAsync({allowsRecordingIOS:false,playsInSilentModeIOS:true});}
+    catch(e:any){setRecording(null);Alert.alert('Voice message not sent',e?.message||'Please try again.');}
+    finally{setRecordingBusy(false);}
+  };
+
   const sendMedia=async()=>{
     if(!active||!session||sending)return;
     if(!deviceIdentity||e2eeStatus!=='ready'){
@@ -603,24 +652,54 @@ export default function App() {
     setIncomingCall(null);
   };
 
+  const chooseProfilePhoto=async()=>{
+    const permission=await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if(!permission.granted){Alert.alert('Permission needed','Allow photo access to choose a profile picture.');return;}
+    const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:['images'],allowsEditing:true,aspect:[1,1],quality:0.85});
+    if(result.canceled||!result.assets?.[0]||!session)return;
+    setProfileUploading(true);
+    try{
+      const asset=result.assets[0],file=new File(asset.uri);
+      if(file.size>10*1024*1024)throw new Error('Profile photo must be under 10 MB.');
+      const bytes=new Uint8Array(await file.arrayBuffer()),objectPath=session.user.id+'/profile/'+Date.now()+'_'+ExpoCrypto.randomUUID()+'.jpg';
+      const {error}=await supabase.storage.from('chat-media').upload(objectPath,bytes,{contentType:'image/jpeg',upsert:false});bytes.fill(0);
+      if(error)throw error;
+      const {data}=await supabase.storage.from('chat-media').createSignedUrl(objectPath,60*60*24);
+      setProfileAvatarPath(objectPath);setProfileAvatarUrl(data?.signedUrl||asset.uri);
+    }catch(e:any){Alert.alert('Photo not saved',e?.message||'Please try again.');}
+    finally{setProfileUploading(false);}
+  };
+
+  const chooseStatusMedia=async()=>{
+    const permission=await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if(!permission.granted){Alert.alert('Permission needed','Allow photo/video access to share status media.');return;}
+    const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:['images','videos'],allowsEditing:false,quality:0.85,videoMaxDuration:60});
+    if(!result.canceled&&result.assets?.[0])setStatusAsset(result.assets[0]);
+  };
+
   const publishStatus=async()=>{
     const caption=statusText.trim();
     if(!session||publishingStatus)return;
-    if(!caption||caption.length>700){
-      Alert.alert('Status text','Write a status between 1 and 700 characters.');
-      return;
-    }
+    if((!caption&&!statusAsset)||caption.length>700){Alert.alert('Status required','Write a caption or choose a photo/video (maximum 700 characters).');return;}
     setPublishingStatus(true);
-    const {error}=await supabase.from('kc_status_updates').insert({
-      user_id:session.user.id,caption
-    });
+    let media_url:string|null=null;
+    if(statusAsset){
+      try{
+        const file=new File(statusAsset.uri);if(file.size>20*1024*1024)throw new Error('Status media must be under 20 MB.');
+        const bytes=new Uint8Array(await file.arrayBuffer()),path=session.user.id+'/status/'+Date.now()+'_'+ExpoCrypto.randomUUID();
+        const mime=statusAsset.mimeType||(statusAsset.type==='video'?'video/mp4':'image/jpeg');
+        const {error:uploadError}=await supabase.storage.from('chat-media').upload(path,bytes,{contentType:mime,upsert:false});bytes.fill(0);
+        if(uploadError)throw uploadError;media_url=path;
+      }catch(e:any){setPublishingStatus(false);Alert.alert('Status upload failed',e?.message||'Please try again.');return;}
+    }
+    const {error}=await supabase.from('kc_status_updates').insert({user_id:session.user.id,caption:caption||null,media_url});
     setPublishingStatus(false);
     if(error){
       Alert.alert('Status not posted',error.message);
       return;
     }
     setStatusComposer(false);
-    setStatusText('');
+    setStatusText('');setStatusAsset(null);
     await loadStatuses();
   };
 
@@ -735,11 +814,13 @@ export default function App() {
     const {data:people}=await supabase.from('kc_profiles')
       .select('id,display_name,username').in('id',ids);
     const personMap=new Map((people||[]).map((person:any)=>[person.id,person]));
-    setStatuses(rows.map(row=>({
+    const mapped=await Promise.all(rows.map(async row=>({
       ...row,
       display_name:(personMap.get(row.user_id) as any)?.display_name||'Guftin member',
-      username:(personMap.get(row.user_id) as any)?.username||''
+      username:(personMap.get(row.user_id) as any)?.username||'',
+      media_signed_url:row.media_url?(await supabase.storage.from('chat-media').createSignedUrl(row.media_url,60*60*24)).data?.signedUrl||null:null
     })));
+    setStatuses(mapped);
   },[session]);
 
   useEffect(()=>{
@@ -832,7 +913,7 @@ export default function App() {
       <FlatList data={list} keyExtractor={m=>m.id} contentContainerStyle={{padding:18,gap:12,flexGrow:1,justifyContent:list.length?'flex-end':'center'}}
         ListEmptyComponent={<Text style={{textAlign:'center',color:C.muted}}>No messages yet. Send the first message.</Text>}
         renderItem={({item})=><View style={{alignSelf:item.mine?'flex-end':'flex-start',maxWidth:'84%',backgroundColor:item.mine?'#dff4e8':C.white,padding:13,borderRadius:17,borderTopRightRadius:item.mine?5:17,borderTopLeftRadius:item.mine?17:5}}>
-          {item.message_type==='image'&&item.attachment_url?<Image source={{uri:item.attachment_url}} style={{width:210,height:210,borderRadius:12}} resizeMode="cover"/>:item.message_type==='video'&&item.attachment_url?<VideoBubble uri={item.attachment_url}/>:<Text style={{color:C.ink,fontSize:14,lineHeight:21}}>{item.body||'Attachment'}</Text>}
+          {item.message_type==='image'&&item.attachment_url?<Image source={{uri:item.attachment_url}} style={{width:210,height:210,borderRadius:12}} resizeMode="cover"/>:item.message_type==='video'&&item.attachment_url?<VideoBubble uri={item.attachment_url}/>:item.message_type==='audio'&&item.attachment_url?<AudioBubble uri={item.attachment_url}/>:<Text style={{color:C.ink,fontSize:14,lineHeight:21}}>{item.body||'Attachment'}</Text>}
           <Text style={{textAlign:'right',fontSize:9,color:C.muted,marginTop:5}}>
             {timeLabel(item.created_at)}{item.mine ? " · " + (peerLastReadAt && new Date(peerLastReadAt).getTime() >= new Date(item.created_at).getTime() ? "✓✓ Seen" : "✓ Sent") : ""}
           </Text>
@@ -840,7 +921,8 @@ export default function App() {
       <KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':undefined}>
         <View style={{flexDirection:'row',alignItems:'center',padding:11,gap:8,backgroundColor:C.white}}>
           <Btn disabled={sending} onPress={sendMedia} style={{width:42,height:42,borderRadius:15,backgroundColor:C.paper,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:23,color:C.green}}>＋</Text></Btn>
-          <TextInput value={draft} onChangeText={setDraft} placeholder="Write a message..." multiline maxLength={4000} style={{flex:1,maxHeight:110,backgroundColor:C.paper,borderRadius:16,paddingHorizontal:15,paddingVertical:12,color:C.ink}}/>
+          <Btn disabled={sending||recordingBusy} onPress={recording?stopVoiceRecording:startVoiceRecording} style={{width:42,height:42,borderRadius:15,backgroundColor:recording?'#fde8e8':C.paper,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:18,color:recording?C.red:C.green}}>{recording?'■':'🎙'}</Text></Btn>
+          <TextInput value={draft} onChangeText={setDraft} placeholder={recording?'Recording… tap ■ to send':'Write a message...'} multiline maxLength={4000} style={{flex:1,maxHeight:110,backgroundColor:C.paper,borderRadius:16,paddingHorizontal:15,paddingVertical:12,color:C.ink}}/>
           <Btn disabled={!draft.trim()||sending} onPress={sendMessage} style={{backgroundColor:C.green,width:46,height:46,borderRadius:16,alignItems:'center',justifyContent:'center'}}>
             {sending?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontSize:20}}>➤</Text>}
           </Btn>
@@ -880,7 +962,7 @@ export default function App() {
     {tab==='Updates'?<ScrollView contentContainerStyle={{padding:20,paddingBottom:30}}>
       <View style={{backgroundColor:C.paper,borderRadius:20,padding:18,marginBottom:18}}>
         <Text style={{fontSize:18,fontWeight:'900',color:C.ink}}>Your status</Text>
-        <Text style={{color:C.muted,fontSize:12,marginTop:5}}>Share a text update. It expires after 24 hours.</Text>
+        <Text style={{color:C.muted,fontSize:12,marginTop:5}}>Share a photo, video or text. It expires after 24 hours.</Text>
         <Btn onPress={()=>setStatusComposer(true)} style={{backgroundColor:C.green,padding:14,borderRadius:14,alignItems:'center',marginTop:13}}>
           <Text style={{color:'#fff',fontWeight:'900'}}>＋ Add status</Text>
         </Btn>
@@ -890,7 +972,8 @@ export default function App() {
         <Avatar label={initials(status.display_name)} color={colorFor(status.user_id)} size={46}/>
         <View style={{flex:1}}>
           <Text style={{fontWeight:'900',color:C.ink}}>{status.user_id===session.user.id?'You':status.display_name}{status.username?'  @'+status.username:''}</Text>
-          <Text style={{color:C.ink,lineHeight:20,marginTop:5}}>{status.caption||'Shared a photo or video'}</Text>
+          {status.media_signed_url?(status.media_url?.toLowerCase().match(/\.(mp4|mov|m4v)$/)?<VideoBubble uri={status.media_signed_url}/>:<Image source={{uri:status.media_signed_url}} style={{width:210,height:190,borderRadius:14,marginTop:8}} resizeMode="cover"/>):null}
+          {status.caption?<Text style={{color:C.ink,lineHeight:20,marginTop:5}}>{status.caption}</Text>:null}
           <Text style={{color:C.muted,fontSize:10,marginTop:5}}>{timeLabel(status.created_at)}</Text>
         </View>
       </View>)}
@@ -898,7 +981,7 @@ export default function App() {
     {tab==='Calls'?<View style={{flex:1,alignItems:'center',justifyContent:'center',padding:32}}><Text style={{fontSize:18,fontWeight:'900',color:C.ink}}>Guftin calls</Text><Text style={{textAlign:'center',color:C.muted,marginTop:8,lineHeight:20}}>Open a direct chat and tap the phone or video icon to invite the other member. Both phones must be online. LiveKit server credentials are required to connect the media stream.</Text></View>:null}
     {tab==='You'?<ScrollView contentContainerStyle={{padding:22}}>
       <View style={{alignItems:'center',padding:25,backgroundColor:C.paper,borderRadius:22}}>
-        <Avatar label={initials(profile?.display_name||session.user.email||'KC')} color={C.green} size={76}/>
+        <Btn onPress={chooseProfilePhoto} style={{alignItems:'center'}}><Avatar label={initials(profile?.display_name||session.user.email||'KC')} color={C.green} size={88} uri={profileAvatarUrl}/><Text style={{color:C.green,fontWeight:'800',fontSize:12,marginTop:8}}>{profileUploading?'Uploading…':'Change profile photo'}</Text></Btn>
         <Text style={{fontSize:20,fontWeight:'900',color:C.ink,marginTop:12}}>{profile?.display_name||'Your profile'}</Text>
         <Text style={{color:C.muted,fontSize:12,marginTop:4}}>{session.user.email||'Verified account'}</Text>
         <Text style={{color:C.green,fontSize:13,fontWeight:'800',marginTop:6}}>@{profile?.username}</Text>
@@ -909,7 +992,7 @@ export default function App() {
       <TextInput value={profileUsername} onChangeText={v=>setProfileUsername(v.toLowerCase().replace(/[^a-z0-9_]/g,''))} placeholder="Your unique username" autoCapitalize="none" maxLength={24} style={{backgroundColor:C.paper,borderRadius:14,padding:15,color:C.ink}}/>
       <Text style={{fontWeight:'800',color:C.ink,marginTop:15,marginBottom:8}}>About</Text>
       <TextInput value={about} onChangeText={setAbout} placeholder="A little about you" maxLength={160} multiline style={{backgroundColor:C.paper,borderRadius:14,padding:15,color:C.ink,minHeight:75,textAlignVertical:'top'}}/>
-      <Btn disabled={savingProfile} onPress={saveProfile} style={{backgroundColor:C.green,padding:15,borderRadius:14,alignItems:'center',marginTop:10}}>{savingProfile?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'800'}}>Save profile</Text>}</Btn>
+      <Btn disabled={savingProfile||profileUploading} onPress={saveProfile} style={{backgroundColor:C.green,padding:15,borderRadius:14,alignItems:'center',marginTop:10}}>{savingProfile?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'800'}}>Save profile</Text>}</Btn>
       <View style={{padding:15,backgroundColor:C.mint,borderRadius:14,marginTop:18}}>
         <Text style={{fontWeight:'900',color:C.green}}>🔒 Message encryption</Text>
         <Text style={{color:C.ink,fontSize:12,lineHeight:18,marginTop:6}}>{e2eeStatus==='ready'?'This device has a private key stored locally. New text messages are encrypted for each registered conversation device before upload.':'This device encryption key is not available yet. Secure text sending is paused.'}</Text>
@@ -927,11 +1010,13 @@ export default function App() {
         <View style={{backgroundColor:C.white,borderRadius:22,padding:22}}>
           <Text style={{fontSize:20,fontWeight:'900',color:C.ink}}>Add a status</Text>
           <Text style={{color:C.muted,lineHeight:19,marginTop:7,marginBottom:16}}>Your text status is visible to Guftin contacts for 24 hours.</Text>
+          <Btn onPress={chooseStatusMedia} style={{backgroundColor:C.mint,padding:13,borderRadius:12,alignItems:'center',marginBottom:12}}><Text style={{color:C.green,fontWeight:'800'}}>{statusAsset?'Change selected media':'＋ Add photo or video'}</Text></Btn>
+          {statusAsset?<Text style={{color:C.green,fontSize:12,marginBottom:8}}>Selected: {statusAsset.fileName||statusAsset.type||'Media'}</Text>:null}
           <TextInput value={statusText} onChangeText={setStatusText} placeholder="What's new?" maxLength={700} multiline style={{backgroundColor:C.paper,borderRadius:14,padding:15,color:C.ink,minHeight:120,textAlignVertical:'top'}}/>
           <Text style={{color:C.muted,fontSize:10,marginTop:7,textAlign:'right'}}>{statusText.length}/700</Text>
           <View style={{flexDirection:'row',justifyContent:'flex-end',gap:10,marginTop:15}}>
             <Btn onPress={()=>setStatusComposer(false)} style={{padding:13}}><Text style={{color:C.muted,fontWeight:'700'}}>Cancel</Text></Btn>
-            <Btn disabled={publishingStatus||!statusText.trim()} onPress={publishStatus} style={{backgroundColor:C.green,paddingHorizontal:18,paddingVertical:13,borderRadius:13}}>{publishingStatus?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'800'}}>Share status</Text>}</Btn>
+            <Btn disabled={publishingStatus||(!statusText.trim()&&!statusAsset)} onPress={publishStatus} style={{backgroundColor:C.green,paddingHorizontal:18,paddingVertical:13,borderRadius:13}}>{publishingStatus?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'800'}}>Share status</Text>}</Btn>
           </View>
         </View>
       </View>
