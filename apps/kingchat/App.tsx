@@ -276,10 +276,6 @@ export default function App() {
     };
   },[session,loadProfile,loadInbox,resolveMessage]);
 
-  useEffect(()=>{
-    if(session&&deviceIdentity&&active)void loadMessages(active.id);
-  },[session?.user?.id,deviceIdentity?.deviceId,active?.id]);
-
   const loadMessages=useCallback(async(conversationId:string)=>{
     if(!session) return;
     const {data,error}=await supabase.from('kc_messages')
@@ -290,6 +286,10 @@ export default function App() {
     const resolved=await Promise.all((data||[]).map((m:any)=>resolveMessage(m)));
     setMessages(prev=>({...prev,[conversationId]:resolved}));
   },[session,resolveMessage]);
+
+  useEffect(()=>{
+    if(session&&deviceIdentity&&active)void loadMessages(active.id);
+  },[session?.user?.id,deviceIdentity?.deviceId,active?.id,loadMessages]);
 
   const refresh=async()=>{
     setRefreshing(true);
