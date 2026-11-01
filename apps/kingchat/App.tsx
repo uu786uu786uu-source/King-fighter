@@ -231,7 +231,7 @@ export default function App() {
         const localFile=new File(Paths.cache,'kc_'+raw.id+'.'+safeExtension);
         if(localFile.exists)localFile.delete();
         localFile.create();
-        localFile.write(decrypted.bytes);
+        await localFile.write(decrypted.bytes);
         attachment_url=localFile.uri;
         body=decrypted.fileName;
       }catch(e:any){
@@ -624,7 +624,7 @@ export default function App() {
         <Avatar label={active.avatar} color={active.color} size={43} online={active.online}/>
         <View style={{flex:1,marginLeft:11}}>
           <Text style={{fontWeight:'900',fontSize:15,color:C.ink}}>{active.name}</Text>
-          <Text style={{fontSize:11,color:e2eeStatus==='ready'?C.green:C.muted}}>{active.online?'● online · ':''}{e2eeStatus==='ready'?'🔒 Text messages encrypted':'Setting up secure chat…'}</Text>
+          <Text style={{fontSize:11,color:e2eeStatus==='ready'?C.green:C.muted}}>{active.online?'● online · ':''}{e2eeStatus==='ready'?'🔒 Encrypted text & media · unverified keys':'Setting up secure chat…'}</Text>
         </View>
         <Btn onPress={()=>Alert.alert('Voice calls','Live calling is not enabled in this version yet.')} style={{padding:9}}><Text style={{fontSize:20}}>☎</Text></Btn>
         <Btn onPress={()=>Alert.alert('Video calls','Video calling requires a WebRTC calling service and signaling infrastructure.')} style={{padding:9}}><Text style={{fontSize:20}}>▣</Text></Btn>
@@ -706,9 +706,9 @@ export default function App() {
       <View style={{padding:15,backgroundColor:C.mint,borderRadius:14,marginTop:18}}>
         <Text style={{fontWeight:'900',color:C.green}}>🔒 Message encryption</Text>
         <Text style={{color:C.ink,fontSize:12,lineHeight:18,marginTop:6}}>{e2eeStatus==='ready'?'This device has a private key stored locally. New text messages are encrypted for each registered conversation device before upload.':'This device encryption key is not available yet. Secure text sending is paused.'}</Text>
-        <Text style={{color:C.muted,fontSize:10,lineHeight:15,marginTop:6}}>This initial version does not yet provide forward secrecy, verified safety numbers, encrypted media/status, or automatic key recovery after reinstalling Android.</Text>
+        <Text style={{color:C.muted,fontSize:10,lineHeight:15,marginTop:6}}>This is an early encryption implementation: it has no forward secrecy or verified safety numbers, and private keys cannot be recovered after reinstalling Android. Status updates and calls are not encrypted.</Text>
       </View>
-      <Btn onPress={()=>Alert.alert('Privacy','New text-message contents are encrypted on this device before being stored. Media and statuses are not yet end-to-end encrypted. The current key exchange has not had an independent security audit and does not provide forward secrecy.')} style={{padding:18,borderBottomWidth:1,borderColor:C.line,marginTop:12}}><Text style={{color:C.ink,fontWeight:'700'}}>Privacy and security　›</Text></Btn>
+      <Btn onPress={()=>Alert.alert('Privacy','New text messages and photo/video attachments are encrypted on the sending device before upload. Public keys are not yet verified with safety numbers, forward secrecy is not implemented, and this version has not had an independent security audit. Status and calls are not end-to-end encrypted.')} style={{padding:18,borderBottomWidth:1,borderColor:C.line,marginTop:12}}><Text style={{color:C.ink,fontWeight:'700'}}>Privacy and security　›</Text></Btn>
       <Btn onPress={()=>supabase.auth.signOut()} style={{padding:18}}><Text style={{color:C.red,fontWeight:'800'}}>Sign out</Text></Btn>
     </ScrollView>:null}
     <View style={{height:69,borderTopWidth:1,borderColor:C.line,flexDirection:'row',alignItems:'center',justifyContent:'space-around',backgroundColor:C.white}}>
