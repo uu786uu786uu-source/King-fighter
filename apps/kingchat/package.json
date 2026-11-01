@@ -32,7 +32,8 @@
     "@livekit/react-native-webrtc": "150.1.1",
     "@config-plugins/react-native-webrtc": "13.0.0",
     "livekit-client": "2.23.0",
-    "sharp": "0.35.5"
+    "sharp": "0.35.5",
+    "expo-splash-screen": "~0.30.10"
   },
   "devDependencies": {
     "@types/react": "~19.1.10",
