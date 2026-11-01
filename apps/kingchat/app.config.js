@@ -1,4 +1,26 @@
+const fs = require("node:fs");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+
+const assetsDirectory = path.join(__dirname, "assets");
+const svgIcon = path.join(assetsDirectory, "guftin-icon.svg");
+const pngIcon = path.join(assetsDirectory, "guftin-icon.png");
+
+// Expo resolves app.config.js synchronously. Create the PNG before returning the
+// config so EAS, Android prebuild and iOS prebuild all see a real image asset.
+const pngIsMissing = !fs.existsSync(pngIcon);
+const svgIsNewer = !pngIsMissing &&
+  fs.statSync(svgIcon).mtimeMs > fs.statSync(pngIcon).mtimeMs;
+if (pngIsMissing || svgIsNewer) {
+  const generated = spawnSync(process.execPath, [path.join(__dirname, "scripts", "prepare-assets.js")], {
+    cwd: __dirname,
+    stdio: "inherit"
+  });
+  if (generated.status !== 0) {
+    throw new Error("Guftin icon generation failed before Expo config resolution.");
+  }
+}
+
 
 module.exports = ({ config }) => ({
   ...config,
