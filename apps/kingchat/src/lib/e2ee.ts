@@ -206,7 +206,7 @@ export function encryptMediaForDevices(
       ephemeralPublicKey: toHex(ephemeral.publicKey),
       fileNonce: toHex(fileNonce),
       mimeType,
-      fileName: fileName.replace(/[\\\\/\\x00-\\x1f]/g, '_').slice(0, 120) || 'attachment',
+      fileName: fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'attachment',
       recipients
     };
     return { ciphertext: encryptedFile, body: E2EE_MEDIA_PREFIX + JSON.stringify(envelope) };
