@@ -290,7 +290,7 @@ export default function App() {
         return {id:row.conversation_id,name,avatar:initials(name),avatarUrl,color:colorFor(name),last:preview,
           time:last?timeLabel(last.created_at):'',unread,online:!!peer?.is_online,kind:conv.kind||'direct',
           lastAt:last?new Date(last.created_at).getTime():new Date(conv.updated_at||row.joined_at).getTime()};
-      }))).sort((a,b)=>b.lastAt-a.lastAt);
+      })).sort((a,b)=>b.lastAt-a.lastAt);
       setChats(mapped);
     }catch(e:any){
       Alert.alert('Inbox could not load',e?.message||'Please check your connection and try again.');
