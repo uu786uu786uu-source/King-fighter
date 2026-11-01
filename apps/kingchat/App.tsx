@@ -12,8 +12,11 @@ import { File, Paths } from 'expo-file-system';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import * as ExpoCrypto from 'expo-crypto';
 import { DeviceIdentity, E2EE_MEDIA_PREFIX, E2EE_PREFIX, decryptMediaForDevice, decryptMessageForDevice, encryptMediaForDevices, encryptMessageForDevices, loadOrCreateDeviceIdentity } from './src/lib/e2ee';
+import { AudioSession, LiveKitRoom, VideoTrack, isTrackReference, registerGlobals, useTracks } from '@livekit/react-native';
+import { Track } from 'livekit-client';
 
 WebBrowser.maybeCompleteAuthSession();
+registerGlobals();
 
 const C = { ink:'#102b27', muted:'#82938e', green:'#087e6c', mint:'#e5f5ee', paper:'#f5f8f6', white:'#fff', line:'#e9efec', red:'#b94e48' };
 type Chat = { id:string; name:string; avatar:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number };
@@ -39,6 +42,38 @@ function Avatar({label,color,size=52,online=false}:any) {
   </View>;
 }
 function Heading({children}:any) { return <Text style={{fontSize:25,fontWeight:'900',color:C.ink,letterSpacing:-.6}}>{children}</Text>; }
+
+function CallRoomScreen({callType,onHangUp}:any) {
+  const tracks=useTracks([Track.Source.Camera]);
+  useEffect(()=>{
+    void AudioSession.startAudioSession();
+    return ()=>{void AudioSession.stopAudioSession();};
+  },[]);
+  return <SafeAreaView style={{flex:1,backgroundColor:'#102b27'}}>
+    <StatusBar barStyle="light-content"/>
+    <View style={{flex:1,justifyContent:'center',padding:18}}>
+      <Text style={{fontSize:24,fontWeight:'900',color:'#fff',textAlign:'center'}}>
+        {callType==='video'?'Video call':'Voice call'}
+      </Text>
+      {callType==='video'?<FlatList
+        data={tracks}
+        keyExtractor={(item:any)=>item.publication?.trackSid||item.participant.identity}
+        renderItem={({item}:any)=>isTrackReference(item)
+          ?<VideoTrack trackRef={item} style={{height:260,borderRadius:16,marginTop:16}}/>
+          :<View style={{height:130,alignItems:'center',justifyContent:'center'}}><Text style={{color:'#fff'}}>Waiting for camera…</Text></View>}
+        ListEmptyComponent={<Text style={{color:'#fff',textAlign:'center',marginTop:25}}>Waiting for video…</Text>}
+      />:<View style={{alignItems:'center',padding:35}}>
+        <Text style={{fontSize:50,color:'#fff'}}>☎</Text>
+        <Text style={{color:'#d8e8e1',marginTop:14}}>King Chat voice connection</Text>
+      </View>}
+    </View>
+    <View style={{padding:20,alignItems:'center'}}>
+      <Btn onPress={onHangUp} style={{backgroundColor:'#c43e48',paddingHorizontal:30,paddingVertical:15,borderRadius:30}}>
+        <Text style={{color:'#fff',fontWeight:'900'}}>End call</Text>
+      </Btn>
+    </View>
+  </SafeAreaView>;
+}
 function VideoBubble({uri}:{uri:string}) {
   const player=useVideoPlayer(uri);
   return <VideoView player={player} style={{width:230,height:165,borderRadius:12}} nativeControls allowsFullscreen contentFit="contain"/>;
@@ -64,6 +99,11 @@ export default function App() {
   const [publishingStatus,setPublishingStatus]=useState(false);
   const [deviceIdentity,setDeviceIdentity]=useState<DeviceIdentity|null>(null);
   const [e2eeStatus,setE2eeStatus]=useState<'loading'|'ready'|'error'>('loading');
+  const [incomingCall,setIncomingCall]=useState<any>(null);
+  const [outgoingCall,setOutgoingCall]=useState<any>(null);
+  const [liveCall,setLiveCall]=useState<any>(null);
+  const [callBusy,setCallBusy]=useState(false);
+  const joiningCallIds=useRef(new Set<string>());
 
   const [authBusy,setAuthBusy]=useState(false);
   const [authMode,setAuthMode]=useState<'login'|'signup'>('signup');
@@ -248,6 +288,38 @@ export default function App() {
     return {...raw,body,attachment_url,mine:raw.sender_id===session?.user?.id};
   },[session,deviceIdentity]);
 
+  const joinCall=useCallback(async(call:any)=>{
+    if(!call?.id||joiningCallIds.current.has(call.id))return;
+    joiningCallIds.current.add(call.id);
+    try{
+      const {data,error}=await supabase.functions.invoke('livekit-token',{body:{call_id:call.id}});
+      if(error)throw error;
+      if(!data?.server_url||!data?.participant_token)throw new Error(data?.error||'The LiveKit token endpoint is not ready.');
+      setLiveCall({id:call.id,callType:call.call_type,serverUrl:data.server_url,token:data.participant_token});
+      setIncomingCall(null);
+      setOutgoingCall(null);
+    }catch(e:any){
+      Alert.alert('Call could not connect',e?.message||'LiveKit credentials are missing or the call is no longer active.');
+      await supabase.from('kc_call_logs').update({status:'ended',ended_at:new Date().toISOString()}).eq('id',call.id);
+      setIncomingCall(null);
+      setOutgoingCall(null);
+    }finally{
+      joiningCallIds.current.delete(call.id);
+    }
+  },[]);
+
+  const respondToCall=useCallback(async(call:any,status:'accepted'|'declined')=>{
+    if(!session||!call?.id)return;
+    const update:any={status};
+    if(status==='accepted')update.started_at=new Date().toISOString();
+    else update.ended_at=new Date().toISOString();
+    const {error}=await supabase.from('kc_call_logs').update(update).eq('id',call.id);
+    if(error){Alert.alert('Call action failed',error.message);return;}
+    setIncomingCall(null);
+    if(status==='accepted')await joinCall({...call,status:'accepted'});
+    else setOutgoingCall(null);
+  },[session,joinCall]);
+
   useEffect(()=>{
     if(!session){
       setLoading(false);setChats([]);setProfile(null);setProfileReady(false);setActive(null);return;
@@ -268,13 +340,38 @@ export default function App() {
           return {...prev,[m.conversation_id]:old.some(x=>x.id===m.id)?old:[...old,item]};
         });
         void loadInbox();
+      })
+      .on('postgres_changes',{event:'*',schema:'public',table:'kc_call_logs'},payload=>{
+        const call=(payload.new||payload.old) as any;
+        if(!call?.id)return;
+        if(call.callee_id===session.user.id&&call.status==='ringing'){
+          setIncomingCall(call);
+          Alert.alert(
+            call.call_type==='video'?'Incoming video call':'Incoming voice call',
+            'A King Chat contact is calling you.',
+            [
+              {text:'Decline',style:'cancel',onPress:()=>void respondToCall(call,'declined')},
+              {text:'Accept',onPress:()=>void respondToCall(call,'accepted')}
+            ],
+            {cancelable:false}
+          );
+        }
+        if(call.caller_id===session.user.id&&call.status==='accepted'){
+          void joinCall(call);
+        }
+        if(['declined','ended','missed','cancelled'].includes(call.status)){
+          setIncomingCall((old:any)=>old?.id===call.id?null:old);
+          setOutgoingCall((old:any)=>old?.id===call.id?null:old);
+          setLiveCall((old:any)=>old?.id===call.id?null:old);
+        }
       }).subscribe();
     return ()=>{
       appState.remove();
       void supabase.removeChannel(channel);
+      setIncomingCall(null);setOutgoingCall(null);setLiveCall(null);
       void supabase.from('kc_profiles').update({is_online:false,last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
     };
-  },[session,loadProfile,loadInbox,resolveMessage]);
+  },[session,loadProfile,loadInbox,resolveMessage,joinCall,respondToCall]);
 
   const loadMessages=useCallback(async(conversationId:string)=>{
     if(!session) return;
@@ -414,6 +511,43 @@ export default function App() {
     }finally{
       setSending(false);
     }
+  };
+
+  const startCall=async(callType:'voice'|'video')=>{
+    if(!active||!session||callBusy)return;
+    if(active.kind!=='direct'){
+      Alert.alert('Direct calls only','Group calls are not enabled in this first calling build.');
+      return;
+    }
+    setCallBusy(true);
+    try{
+      const {data:members,error:memberError}=await supabase.from('kc_conversation_members')
+        .select('user_id').eq('conversation_id',active.id);
+      if(memberError)throw memberError;
+      const peers=[...new Set((members||[]).map((row:any)=>row.user_id).filter((id:string)=>id!==session.user.id))] as string[];
+      if(peers.length!==1)throw new Error('This call needs exactly one other member in the direct chat.');
+      const {data,error}=await supabase.from('kc_call_logs').insert({
+        conversation_id:active.id,
+        caller_id:session.user.id,
+        callee_id:peers[0],
+        call_type:callType,
+        status:'ringing'
+      }).select('id,conversation_id,caller_id,callee_id,call_type,status').single();
+      if(error)throw error;
+      setOutgoingCall(data);
+      Alert.alert('Calling','Calling '+active.name+'. Keep King Chat open while they answer.');
+    }catch(e:any){
+      Alert.alert('Call could not start',e?.message||'Please try again.');
+    }finally{
+      setCallBusy(false);
+    }
+  };
+
+  const endCall=async(callId:string)=>{
+    await supabase.from('kc_call_logs').update({status:'ended',ended_at:new Date().toISOString()}).eq('id',callId);
+    setLiveCall(null);
+    setOutgoingCall(null);
+    setIncomingCall(null);
   };
 
   const publishStatus=async()=>{
@@ -615,6 +749,19 @@ export default function App() {
     </SafeAreaView>;
   }
 
+  if(liveCall){
+    return <LiveKitRoom
+      serverUrl={liveCall.serverUrl}
+      token={liveCall.token}
+      connect={true}
+      audio={true}
+      video={liveCall.callType==='video'}
+      onDisconnected={()=>void endCall(liveCall.id)}
+    >
+      <CallRoomScreen callType={liveCall.callType} onHangUp={()=>void endCall(liveCall.id)}/>
+    </LiveKitRoom>;
+  }
+
   if(active){
     const list=messages[active.id]||[];
     return <SafeAreaView style={{flex:1,backgroundColor:C.paper}}>
@@ -624,10 +771,10 @@ export default function App() {
         <Avatar label={active.avatar} color={active.color} size={43} online={active.online}/>
         <View style={{flex:1,marginLeft:11}}>
           <Text style={{fontWeight:'900',fontSize:15,color:C.ink}}>{active.name}</Text>
-          <Text style={{fontSize:11,color:e2eeStatus==='ready'?C.green:C.muted}}>{active.online?'● online · ':''}{e2eeStatus==='ready'?'🔒 Encrypted text & media · unverified keys':'Setting up secure chat…'}</Text>
+          <Text style={{fontSize:11,color:e2eeStatus==='ready'?C.green:C.muted}}>{active.online?'● online · ':''}{outgoingCall?'Calling…':e2eeStatus==='ready'?'🔒 Encrypted text & media · unverified keys':'Setting up secure chat…'}</Text>
         </View>
-        <Btn onPress={()=>Alert.alert('Voice calls','Live calling is not enabled in this version yet.')} style={{padding:9}}><Text style={{fontSize:20}}>☎</Text></Btn>
-        <Btn onPress={()=>Alert.alert('Video calls','Video calling requires a WebRTC calling service and signaling infrastructure.')} style={{padding:9}}><Text style={{fontSize:20}}>▣</Text></Btn>
+        <Btn disabled={callBusy||!!outgoingCall} onPress={()=>void startCall('voice')} style={{padding:9,opacity:callBusy?0.5:1}}><Text style={{fontSize:20}}>☎</Text></Btn>
+        <Btn disabled={callBusy||!!outgoingCall} onPress={()=>void startCall('video')} style={{padding:9,opacity:callBusy?0.5:1}}><Text style={{fontSize:20}}>▣</Text></Btn>
       </View>
       <FlatList data={list} keyExtractor={m=>m.id} contentContainerStyle={{padding:18,gap:12,flexGrow:1,justifyContent:list.length?'flex-end':'center'}}
         ListEmptyComponent={<Text style={{textAlign:'center',color:C.muted}}>No messages yet. Send the first message.</Text>}
@@ -688,7 +835,7 @@ export default function App() {
         </View>
       </View>)}
     </ScrollView>:null}
-    {tab==='Calls'?<View style={{flex:1,alignItems:'center',justifyContent:'center',padding:32}}><Text style={{fontSize:18,fontWeight:'900',color:C.ink}}>Calling is not enabled yet</Text><Text style={{textAlign:'center',color:C.muted,marginTop:8,lineHeight:20}}>Voice and video calls need a WebRTC calling service, signaling and TURN servers.</Text></View>:null}
+    {tab==='Calls'?<View style={{flex:1,alignItems:'center',justifyContent:'center',padding:32}}><Text style={{fontSize:18,fontWeight:'900',color:C.ink}}>King Chat calls</Text><Text style={{textAlign:'center',color:C.muted,marginTop:8,lineHeight:20}}>Open a direct chat and tap the phone or video icon to invite the other member. Both phones must be online. LiveKit server credentials are required to connect the media stream.</Text></View>:null}
     {tab==='You'?<ScrollView contentContainerStyle={{padding:22}}>
       <View style={{alignItems:'center',padding:25,backgroundColor:C.paper,borderRadius:22}}>
         <Avatar label={initials(profile?.display_name||session.user.email||'KC')} color={C.green} size={76}/>
