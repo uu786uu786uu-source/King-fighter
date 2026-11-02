@@ -48,3 +48,11 @@ This release implements email/password auth, a Google OAuth flow, username profi
 - Live AdMob monetization is intentionally not enabled by default. Google's publisher rules require the AdMob account holder to be at least 18; a parent/guardian may apply with their own Google Account and payments are issued to that person.
 - For an approved adult-managed publisher account only, set `ADMOB_ANDROID_APP_ID`, `ADMOB_IOS_APP_ID`, and `EXPO_PUBLIC_ADMOB_BANNER_UNIT_ID` in the build environment. The unit ID must be a Banner-format unit. Keep these outside Git.
 - The two Ad Unit IDs in the screenshots are not used in this test build because the screenshots do not show which format each unit belongs to. Do not use a non-banner unit in the banner placement.
+
+
+## Navigation, sessions and live status updates
+
+- Supabase Auth persists sessions in AsyncStorage and the app waits for session restoration before showing the sign-in screen.
+- Android hardware Back dismisses dialogs, returns from a chat to the chat list, and navigates other tabs back to Chats without immediately exiting Guftin from its home tab.
+- Status updates, views and likes are included in the `supabase_realtime` publication. The Updates tab listens for changes and also refreshes periodically while it is open.
+- The main tab bar reserves the Android navigation safe-area inset to keep controls clear of the system navigation buttons.
