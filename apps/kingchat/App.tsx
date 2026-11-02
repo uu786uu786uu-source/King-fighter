@@ -428,6 +428,21 @@ export default function App() {
     }finally{setPushBusy(false);}
   };
 
+  const disablePushNotifications=async()=>{
+    if(!session||pushBusy)return;
+    setPushBusy(true);
+    try{
+      const config=Constants.expoConfig as any;
+      const projectId=(Constants as any).easConfig?.projectId||config?.extra?.eas?.projectId||process.env.EXPO_PUBLIC_EAS_PROJECT_ID;
+      if(projectId){
+        const token=(await Notifications.getExpoPushTokenAsync({projectId})).data;
+        await supabase.from('kc_device_tokens').delete().eq('user_id',session.user.id).eq('token',token);
+      }
+      setPushEnabled(false);
+    }catch(e:any){Alert.alert('Could not turn notifications off',e?.message||'Please try again.');}
+    finally{setPushBusy(false);}
+  };
+
   const dispatchPush=async(kind:'message'|'call',id:string)=>{
     try{
       const {error}=await supabase.functions.invoke('guftin-push',{body:kind==='message'?{kind,message_id:id}:{kind,call_id:id}});
@@ -601,6 +616,40 @@ export default function App() {
       void supabase.from('kc_profiles').update({is_online:false,last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
     };
   },[session,loadProfile,loadInbox,resolveMessage,joinCall,respondToCall,onlineVisibility,autoSync,syncIntervalSeconds,showReadReceipts,mediaAutoDownload]);
+
+  useEffect(()=>{
+    if(!session)return;
+    const subscription=Notifications.addNotificationResponseReceivedListener(response=>{
+      const data=response.notification.request.content.data as any;
+      if(data?.type==='incoming_call'&&typeof data.call_id==='string'){
+        void supabase.from('kc_call_logs').select('id,conversation_id,caller_id,callee_id,call_type,status')
+          .eq('id',data.call_id).maybeSingle().then(({data:call})=>{
+            if(call?.status==='ringing'){
+              setTab('Calls');
+              setIncomingCall(call);
+              Alert.alert(
+                call.call_type==='video'?'Incoming video call':'Incoming voice call',
+                'A Guftin contact is calling you.',
+                [
+                  {text:'Decline',style:'cancel',onPress:()=>void respondToCall(call,'declined')},
+                  {text:'Accept',onPress:()=>void respondToCall(call,'accepted')}
+                ],
+                {cancelable:false}
+              );
+            }
+          });
+      }else if(data?.type==='message'){
+        setTab('Chats');
+        if(typeof data.conversation_id==='string'){
+          void loadInbox().then(()=>{
+            const chat=chats.find(item=>item.id===data.conversation_id);
+            if(chat)void openChat(chat);
+          });
+        }
+      }
+    });
+    return ()=>subscription.remove();
+  },[session,respondToCall,loadInbox,chats]);
 
   const loadMessages=useCallback(async(conversationId:string)=>{
     if(!session) return;
@@ -1248,6 +1297,7 @@ export default function App() {
         <Text style={{color:C.muted,fontSize:12,marginTop:5,marginBottom:15}}>Privacy and connection preferences</Text>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Show online status</Text><Text style={{color:C.muted,fontSize:11}}>Let contacts see when you are online</Text></View><Switch value={onlineVisibility} onValueChange={setOnlineVisibility} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Read receipts</Text><Text style={{color:C.muted,fontSize:11}}>Show seen status on messages</Text></View><Switch value={showReadReceipts} onValueChange={setShowReadReceipts} trackColor={{true:C.green}}/></View>
+        <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Push notifications</Text><Text style={{color:C.muted,fontSize:11}}>Alerts for new messages and incoming calls</Text></View><Switch value={pushEnabled} disabled={pushBusy} onValueChange={enabled=>enabled?void enablePushNotifications():void disablePushNotifications()} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Automatic message sync</Text><Text style={{color:C.muted,fontSize:11}}>Refresh while Guftin is open</Text></View><Switch value={autoSync} onValueChange={setAutoSync} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Auto-save incoming photos/videos</Text><Text style={{color:C.muted,fontSize:11}}>Save new media to your gallery automatically</Text></View><Switch value={mediaAutoDownload} onValueChange={setMediaAutoDownload} trackColor={{true:C.green}}/></View>
         <Text style={{color:C.ink,fontWeight:'800',marginTop:12}}>App theme</Text>
