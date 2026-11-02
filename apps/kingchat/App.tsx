@@ -38,6 +38,9 @@ type Chat = { id:string; name:string; avatar:string; avatarUrl?:string; color:st
 type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; attachment_url?:string|null; created_at:string; mine:boolean; deleted_at?:string|null };
 const AUTH_REDIRECT_URL = 'kingchat://auth/callback';
 const palette = ['#d49a91','#8796c7','#81ad98','#bd8aa8','#c4a47c','#9a91bd'];
+// Supabase chat-media is currently configured for 50 MB per object. Keep encrypted
+// uploads below that ceiling because authenticated encryption adds a small overhead.
+const MAX_MEDIA_BYTES = 45 * 1024 * 1024;
 const initials = (s:string) => s.trim().split(/\s+/).slice(0,2).map(x=>x[0]||'').join('').toUpperCase() || 'KC';
 const colorFor = (s:string) => { let n=0; for(let i=0;i<s.length;i++) n=(n*31+s.charCodeAt(i))>>>0; return palette[n%palette.length]; };
 const timeLabel = (value:string) => {
@@ -174,6 +177,15 @@ function GuftinApp() {
   const [addOpen,setAddOpen]=useState(false);
   const [contactUsername,setContactUsername]=useState('');
   const [adding,setAdding]=useState(false);
+  const [groupCreateOpen,setGroupCreateOpen]=useState(false);
+  const [groupName,setGroupName]=useState('');
+  const [groupContacts,setGroupContacts]=useState<any[]>([]);
+  const [selectedGroupIds,setSelectedGroupIds]=useState<string[]>([]);
+  const [groupContactsLoading,setGroupContactsLoading]=useState(false);
+  const [groupCreating,setGroupCreating]=useState(false);
+  const [chatDetailsOpen,setChatDetailsOpen]=useState(false);
+  const [chatDetails,setChatDetails]=useState<any>(null);
+  const [chatDetailsLoading,setChatDetailsLoading]=useState(false);
 
   const [profileName,setProfileName]=useState('');
   const [profileUsername,setProfileUsername]=useState('');
@@ -319,10 +331,9 @@ function GuftinApp() {
 
   const loadInbox=useCallback(async()=>{
     if(!session) return;
-    setLoading(true);
     try{
       const {data:memberships,error}=await supabase.from('kc_conversation_members')
-        .select('conversation_id,joined_at,last_read_at,hidden_at,conversation:kc_conversations!inner(id,kind,title,updated_at)')
+        .select('conversation_id,joined_at,last_read_at,hidden_at,conversation:kc_conversations!inner(id,kind,title,photo_url,updated_at)')
         .eq('user_id',session.user.id).is('hidden_at',null);
       if(error) throw error;
       const rows=(memberships||[]) as any[];
@@ -350,7 +361,8 @@ function GuftinApp() {
         const peers=members.filter(m=>m.conversation_id===row.conversation_id&&m.user_id!==session.user.id);
         const peer=peers.length?profileMap.get(peers[0].user_id):null;
         const name=conv.kind==='group'?(conv.title||'Group chat'):(peer?.display_name||'Guftin member');
-        const avatarUrl=peer?.avatar_url?(await supabase.storage.from('chat-media').createSignedUrl(peer.avatar_url,60*60*24)).data?.signedUrl||undefined:undefined;
+        const avatarPath=conv.kind==='group'?(conv.photo_url||null):(peer?.avatar_url||null);
+        const avatarUrl=avatarPath?(await supabase.storage.from('chat-media').createSignedUrl(avatarPath,60*60*24)).data?.signedUrl||undefined:undefined;
         const last=latest.get(row.conversation_id);
         const readThrough=Math.max(
           row.last_read_at?new Date(row.last_read_at).getTime():0,
@@ -483,7 +495,7 @@ function GuftinApp() {
     finally{setPushBusy(false);}
   };
 
-  const dispatchPush=async(kind:'message'|'call',id:string)=>{
+  const dispatchPush=async(kind:'message'|'call'|'status',id:string)=>{
     try{
       const {error}=await supabase.functions.invoke('guftin-push',{body:kind==='message'?{kind,message_id:id}:{kind,call_id:id}});
       if(error)console.warn('Push dispatch:',error.message);
@@ -611,6 +623,10 @@ function GuftinApp() {
         }
         void loadInbox();
       })
+      .on('postgres_changes',{event:'UPDATE',schema:'public',table:'kc_profiles'},()=>{
+        // Refresh names and signed avatar URLs immediately after a contact edits a profile.
+        void loadInbox();
+      })
       .on('postgres_changes',{event:'*',schema:'public',table:'kc_call_logs'},payload=>{
         const call=(payload.new||payload.old) as any;
         if(!call?.id)return;
@@ -700,6 +716,8 @@ function GuftinApp() {
           setPendingNotificationConversation(data.conversation_id);
           void loadInbox();
         }
+      }else if(data?.type==='status'){
+        setTab('Updates');
       }
     };
     const subscription=Notifications.addNotificationResponseReceivedListener(handleNotificationResponse);
@@ -756,10 +774,10 @@ function GuftinApp() {
 
   const openChat=async(chat:Chat)=>{
     setPeerLastReadAt(null);
-    await supabase.from('kc_conversation_members').update({hidden_at:null})
-      .eq('conversation_id',chat.id).eq('user_id',session.user.id);
     setActive(chat);
-    await loadMessages(chat.id);
+    // The active-chat effect performs the single initial load; do not fetch twice.
+    void supabase.from('kc_conversation_members').update({hidden_at:null})
+      .eq('conversation_id',chat.id).eq('user_id',session.user.id);
   };
 
   useEffect(()=>{
@@ -817,7 +835,7 @@ function GuftinApp() {
 
   const uploadVoiceMessage=async(uri:string)=>{
     if(!active||!session||!deviceIdentity||e2eeStatus!=='ready')throw new Error('Secure chat is not ready.');
-    const file=new File(uri);if(file.size>20*1024*1024)throw new Error('Voice message is too large.');
+    const file=new File(uri);if(file.size>MAX_MEDIA_BYTES)throw new Error('This file is larger than the current 45 MB cloud-storage limit.');
     const {data:members,error:membersError}=await supabase.from('kc_conversation_members').select('user_id').eq('conversation_id',active.id);
     if(membersError)throw membersError;
     const memberIds=[...new Set((members||[]).map((row:any)=>row.user_id))] as string[];
@@ -870,8 +888,8 @@ function GuftinApp() {
       const asset=result.assets[0];
       const messageType=asset.type==='video'?'video':'image';
       const file=new File(asset.uri);
-      if(file.size>20*1024*1024){
-        Alert.alert('File too large','Encrypted media is currently limited to 20 MB per photo or video.');
+      if(file.size>MAX_MEDIA_BYTES){
+        Alert.alert('File too large','Encrypted photos and videos can be up to 45 MB with the current cloud-storage limit.');
         return;
       }
       const contentType=asset.mimeType||(messageType==='video'?'video/mp4':'image/jpeg');
@@ -996,14 +1014,14 @@ function GuftinApp() {
     let media_url:string|null=null;
     if(statusAsset){
       try{
-        const file=new File(statusAsset.uri);if(file.size>20*1024*1024)throw new Error('Status media must be under 20 MB.');
+        const file=new File(statusAsset.uri);if(file.size>MAX_MEDIA_BYTES)throw new Error('Status photo or video must be under 45 MB with the current cloud-storage limit.');
         const bytes=new Uint8Array(await file.arrayBuffer()),ext=statusAsset.type==='video'?'mp4':'jpg',path=session.user.id+'/status/'+Date.now()+'_'+ExpoCrypto.randomUUID()+'.'+ext;
         const mime=statusAsset.mimeType||(statusAsset.type==='video'?'video/mp4':'image/jpeg');
         const {error:uploadError}=await supabase.storage.from('chat-media').upload(path,bytes,{contentType:mime,upsert:false});bytes.fill(0);
         if(uploadError)throw uploadError;media_url=path;
       }catch(e:any){setPublishingStatus(false);Alert.alert('Status upload failed',e?.message||'Please try again.');return;}
     }
-    const {error}=await supabase.from('kc_status_updates').insert({user_id:session.user.id,caption:caption||null,media_url});
+    const {data:postedStatus,error}=await supabase.from('kc_status_updates').insert({user_id:session.user.id,caption:caption||null,media_url}).select('id').single();
     setPublishingStatus(false);
     if(error){
       Alert.alert('Status not posted',error.message);
@@ -1011,6 +1029,7 @@ function GuftinApp() {
     }
     setStatusComposer(false);
     setStatusText('');setStatusAsset(null);
+    if(postedStatus?.id)void dispatchPush('status',postedStatus.id);
     await loadStatuses();
   };
 
@@ -1111,6 +1130,86 @@ function GuftinApp() {
     Alert.alert('Saved','Your Guftin profile has been updated.');
   };
 
+  const loadGroupContacts=async()=>{
+    if(!session)return;
+    setGroupContactsLoading(true);
+    try{
+      const {data:links,error}=await supabase.from('kc_contacts').select('contact_id').eq('owner_id',session.user.id);
+      if(error)throw error;
+      const ids=[...new Set((links||[]).map((row:any)=>row.contact_id).filter(Boolean))] as string[];
+      if(!ids.length){setGroupContacts([]);return;}
+      const {data:people,error:peopleError}=await supabase.from('kc_profiles')
+        .select('id,display_name,username,avatar_url').in('id',ids).order('display_name');
+      if(peopleError)throw peopleError;
+      const contacts=await Promise.all((people||[]).map(async(person:any)=>{
+        const avatar=person.avatar_url?(await supabase.storage.from('chat-media').createSignedUrl(person.avatar_url,60*60*24)).data?.signedUrl||undefined:undefined;
+        return {...person,avatar_signed_url:avatar};
+      }));
+      setGroupContacts(contacts);
+    }catch(e:any){
+      Alert.alert('Contacts could not load',e?.message||'Please try again.');
+    }finally{setGroupContactsLoading(false);}
+  };
+
+  const openGroupCreator=async()=>{
+    setGroupName('');
+    setSelectedGroupIds([]);
+    setGroupCreateOpen(true);
+    await loadGroupContacts();
+  };
+
+  const toggleGroupMember=(id:string)=>{
+    setSelectedGroupIds(current=>current.includes(id)?current.filter(value=>value!==id):[...current,id]);
+  };
+
+  const createGroup=async()=>{
+    const title=groupName.trim();
+    if(!session||groupCreating)return;
+    if(title.length<2||title.length>60){Alert.alert('Group name required','Enter a group name between 2 and 60 characters.');return;}
+    if(selectedGroupIds.length<1){Alert.alert('Add members','Select at least one contact to create a group.');return;}
+    setGroupCreating(true);
+    try{
+      const {data,error}=await supabase.rpc('kc_create_group',{p_title:title,p_member_ids:selectedGroupIds});
+      if(error)throw error;
+      const conversationId=typeof data==='string'?data:(Array.isArray(data)?data[0]:data);
+      if(!conversationId)throw new Error('The group was created but its conversation ID was not returned.');
+      const chat:Chat={id:conversationId,name:title,avatar:initials(title),color:colorFor(title),last:'Group created',time:timeLabel(new Date().toISOString()),unread:0,online:false,kind:'group',lastAt:Date.now()};
+      setChats(current=>[chat,...current.filter(item=>item.id!==chat.id)]);
+      setGroupCreateOpen(false);
+      setActive(chat);
+      void loadInbox();
+    }catch(e:any){
+      Alert.alert('Group could not be created',e?.message||'Please check your contacts and try again.');
+    }finally{setGroupCreating(false);}
+  };
+
+  const openChatDetails=async()=>{
+    if(!active||!session||chatDetailsLoading)return;
+    setChatDetailsLoading(true);
+    try{
+      const [{data:conversation,error:conversationError},{data:members,error:membersError}]=await Promise.all([
+        supabase.from('kc_conversations').select('id,kind,title,photo_url,created_at,created_by').eq('id',active.id).single(),
+        supabase.from('kc_conversation_members').select('user_id,role,joined_at').eq('conversation_id',active.id)
+      ]);
+      if(conversationError)throw conversationError;
+      if(membersError)throw membersError;
+      const ids=[...new Set((members||[]).map((member:any)=>member.user_id))] as string[];
+      const {data:people,error:peopleError}=await supabase.from('kc_profiles')
+        .select('id,display_name,username,about,avatar_url,is_online,last_seen_at').in('id',ids);
+      if(peopleError)throw peopleError;
+      const peopleMap=new Map((people||[]).map((person:any)=>[person.id,person]));
+      const details=await Promise.all((members||[]).map(async(member:any)=>{
+        const person:any=peopleMap.get(member.user_id)||{};
+        const avatar=person.avatar_url?(await supabase.storage.from('chat-media').createSignedUrl(person.avatar_url,60*60*24)).data?.signedUrl||null:null;
+        return {...member,...person,avatar_signed_url:avatar,is_me:member.user_id===session.user.id};
+      }));
+      setChatDetails({conversation,members:details});
+      setChatDetailsOpen(true);
+    }catch(e:any){
+      Alert.alert('Details could not load',e?.message||'Please try again.');
+    }finally{setChatDetailsLoading(false);}
+  };
+
   const loadStatuses=useCallback(async()=>{
     if(!session)return;
     const {data,error}=await supabase.from('kc_status_updates')
@@ -1138,7 +1237,7 @@ function GuftinApp() {
       }
     }
     const [peopleResult,viewsResult,likesResult]=await Promise.all([
-      supabase.from('kc_profiles').select('id,display_name,username').in('id',[...new Set(rows.map(row=>row.user_id))]),
+      supabase.from('kc_profiles').select('id,display_name,username,avatar_url').in('id',[...new Set(rows.map(row=>row.user_id))]),
       supabase.from('kc_status_views').select('status_id,viewer_id,viewed_at').in('status_id',ids),
       supabase.from('kc_status_likes').select('status_id,user_id,created_at').in('status_id',ids)
     ]);
@@ -1153,12 +1252,16 @@ function GuftinApp() {
     const statusActorMap=new Map((statusActors||[]).map((person:any)=>[person.id,person]));
     const mapped=await Promise.all(rows.map(async row=>{
       const signed=row.media_url?(await supabase.storage.from('chat-media').createSignedUrl(row.media_url,60*60*24)).data?.signedUrl||null:null;
+      const avatarPath=(people.get(row.user_id) as any)?.avatar_url||null;
+      const avatarSigned=avatarPath?(await supabase.storage.from('chat-media').createSignedUrl(avatarPath,60*60*24)).data?.signedUrl||null:null;
       const views=(viewsResult.data||[]).filter((view:any)=>view.status_id===row.id);
       const likes=(likesResult.data||[]).filter((like:any)=>like.status_id===row.id);
       return {
         ...row,
         display_name:(people.get(row.user_id) as any)?.display_name||'Guftin member',
         username:(people.get(row.user_id) as any)?.username||'',
+        avatar_signed_url:avatarSigned,
+        status_count:rows.filter(candidate=>candidate.user_id===row.user_id).length,
         media_signed_url:signed,
         view_count:views.length,
         viewer_names:views.map((view:any)=>(statusActorMap.get(view.viewer_id) as any)?.display_name||'Guftin member'),
@@ -1293,10 +1396,10 @@ function GuftinApp() {
       <View style={{minHeight:82,backgroundColor:C.white,flexDirection:'row',alignItems:'center',paddingHorizontal:12,paddingVertical:7,borderBottomWidth:1,borderColor:C.line,elevation:2}}>
         <Btn onPress={()=>setActive(null)} style={{padding:10}}><Text style={{fontSize:24,color:C.ink}}>‹</Text></Btn>
         <Avatar label={active.avatar} color={active.color} size={43} online={active.online} uri={active.avatarUrl}/>
-        <View style={{flex:1,marginLeft:11}}>
-          <Text style={{fontWeight:'900',fontSize:15,color:C.ink}}>{active.name}</Text>
-          <Text style={{fontSize:11,color:active.online?C.green:C.muted}}>{outgoingCall?'Calling…':active.online?'● online':'Guftin chat'}</Text>
-        </View>
+        <Btn onPress={()=>void openChatDetails()} style={{flex:1,marginLeft:11,alignItems:'flex-start'}}>
+          <Text numberOfLines={1} style={{fontWeight:'900',fontSize:15,color:C.ink}}>{active.name}</Text>
+          <Text style={{fontSize:11,color:active.online?C.green:C.muted}}>{active.kind==='group'?'Tap for group info':outgoingCall?'Calling…':active.online?'● online':'Tap for contact info'}</Text>
+        </Btn>
         <Btn disabled={callBusy||!!outgoingCall} onPress={()=>void startCall('voice')} style={{backgroundColor:C.mint,borderRadius:15,width:56,height:58,alignItems:'center',justifyContent:'center',opacity:callBusy?0.5:1,borderWidth:1,borderColor:'#cce9dc'}}><Text style={{fontSize:20,color:C.green}}>☎</Text><Text style={{fontSize:10,fontWeight:'900',color:C.green}}>Call</Text></Btn>
         <Btn disabled={callBusy||!!outgoingCall} onPress={()=>void startCall('video')} style={{backgroundColor:C.mint,borderRadius:15,width:56,height:58,alignItems:'center',justifyContent:'center',opacity:callBusy?0.5:1,borderWidth:1,borderColor:'#cce9dc'}}><Text style={{fontSize:19,color:C.green}}>▣</Text><Text style={{fontSize:10,fontWeight:'900',color:C.green}}>Video</Text></Btn>
       </View>
@@ -1331,6 +1434,7 @@ function GuftinApp() {
       </View>
       <View style={{flexDirection:'row',gap:9}}>
         <Btn onPress={()=>setSettingsOpen(true)} style={{backgroundColor:C.paper,width:42,height:42,borderRadius:15,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:19,color:C.green}}>⚙</Text></Btn>
+        {tab==='Chats'?<Btn onPress={()=>void openGroupCreator()} style={{backgroundColor:C.mint,width:42,height:42,borderRadius:15,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:18,color:C.green}}>👥</Text></Btn>:null}
         {tab==='Chats'?<Btn onPress={()=>setSearching(!searching)} style={{backgroundColor:C.paper,width:42,height:42,borderRadius:15,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:19}}>⌕</Text></Btn>:null}
         {tab==='Chats'?<Btn onPress={()=>setAddOpen(true)} style={{backgroundColor:C.green,width:42,height:42,borderRadius:15,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:24,color:'#fff'}}>＋</Text></Btn>:null}
       </View>
@@ -1362,14 +1466,15 @@ function GuftinApp() {
           <Text style={{color:'#fff',fontWeight:'900'}}>＋ Add status</Text>
         </Btn>
       </View>
-      <Text style={{fontSize:16,fontWeight:'900',color:C.ink,marginBottom:10}}>Recent updates</Text>
+      <Text style={{fontSize:16,fontWeight:'900',color:C.ink,marginBottom:4}}>Recent updates</Text>
+      <Text style={{fontSize:11,color:C.muted,marginBottom:10}}>{new Set(statuses.map((item:any)=>item.user_id)).size} people · {statuses.length} updates shared in the last 24 hours</Text>
       {statuses.length===0?<Text style={{color:C.muted,textAlign:'center',padding:30}}>No active statuses from your contacts yet.</Text>:statuses.map((status:any)=><View key={status.id} style={{padding:14,borderBottomWidth:1,borderColor:C.line,flexDirection:'row',gap:12}}>
-        <Avatar label={initials(status.display_name)} color={colorFor(status.user_id)} size={46}/>
+        <Avatar label={initials(status.display_name)} color={colorFor(status.user_id)} size={46} uri={status.avatar_signed_url}/>
         <View style={{flex:1}}>
           <Text style={{fontWeight:'900',color:C.ink}}>{status.user_id===session.user.id?'You':status.display_name}{status.username?'  @'+status.username:''}</Text>
           {status.media_signed_url?(status.media_url?.toLowerCase().match(/\.(mp4|mov|m4v)$/)?<VideoBubble uri={status.media_signed_url}/>:<Image source={{uri:status.media_signed_url}} style={{width:210,height:190,borderRadius:14,marginTop:8}} resizeMode="cover"/>):null}
           {status.caption?<Text style={{color:C.ink,lineHeight:20,marginTop:5}}>{status.caption}</Text>:null}
-          <Text style={{color:C.muted,fontSize:10,marginTop:5}}>{timeLabel(status.created_at)}</Text>
+          <Text style={{color:C.muted,fontSize:10,marginTop:5}}>{timeLabel(status.created_at)} · {status.status_count} status update{status.status_count===1?'':'s'} from this person</Text>
           {status.user_id===session.user.id?<View style={{marginTop:8,padding:10,borderRadius:12,backgroundColor:C.paper}}>
             <Text style={{fontSize:11,color:C.green,fontWeight:'900'}}>◉ {status.view_count||0} views  ·  ♥ {status.like_count||0} likes</Text>
             {status.viewer_names?.length?<Text style={{fontSize:10,color:C.muted,marginTop:4}}>Seen by: {status.viewer_names.join(', ')}</Text>:null}
@@ -1430,6 +1535,64 @@ function GuftinApp() {
       {([['Chats','▤'],['Updates','◉'],['Calls','⌕'],['You','●']] as string[][]).map(([t,icon])=><Btn key={t} onPress={()=>setTab(t)} style={{alignItems:'center',minWidth:64}}><Text style={{fontSize:19,color:tab===t?C.green:C.muted}}>{icon}</Text><Text style={{fontSize:10,fontWeight:tab===t?'900':'600',color:tab===t?C.green:C.muted,marginTop:3}}>{t}</Text></Btn>)}
     </View>
 
+    <Modal visible={groupCreateOpen} transparent animationType="slide" onRequestClose={()=>setGroupCreateOpen(false)}>
+      <View style={{flex:1,backgroundColor:'#0008',justifyContent:'flex-end'}}>
+        <View style={{backgroundColor:C.white,borderTopLeftRadius:24,borderTopRightRadius:24,padding:20,maxHeight:'88%'}}>
+          <Text style={{fontSize:21,fontWeight:'900',color:C.ink}}>Create a group</Text>
+          <Text style={{fontSize:12,color:C.muted,marginTop:5}}>Choose a name and add people from your saved contacts.</Text>
+          <TextInput value={groupName} onChangeText={setGroupName} placeholder="Group name" maxLength={60} style={{backgroundColor:C.paper,borderRadius:14,padding:14,marginTop:15,color:C.ink}}/>
+          <Text style={{fontSize:13,fontWeight:'900',color:C.ink,marginTop:16,marginBottom:8}}>Members ({selectedGroupIds.length})</Text>
+          {groupContactsLoading?<ActivityIndicator color={C.green} style={{padding:24}}/>:groupContacts.length===0?
+            <Text style={{color:C.muted,padding:20,textAlign:'center'}}>No saved contacts yet. Add contacts by username first.</Text>:
+            <FlatList data={groupContacts} keyExtractor={(item:any)=>item.id} style={{maxHeight:300}} renderItem={({item}:any)=>{
+              const selected=selectedGroupIds.includes(item.id);
+              return <Btn onPress={()=>toggleGroupMember(item.id)} style={{flexDirection:'row',alignItems:'center',gap:11,paddingVertical:10,borderBottomWidth:1,borderColor:C.line}}>
+                <Avatar label={initials(item.display_name||item.username||'G')} color={colorFor(item.id)} size={42} uri={item.avatar_signed_url}/>
+                <View style={{flex:1}}><Text style={{fontWeight:'800',color:C.ink}}>{item.display_name||'Guftin member'}</Text><Text style={{fontSize:11,color:C.muted}}>@{item.username||'member'}</Text></View>
+                <Text style={{fontSize:20,color:selected?C.green:C.muted,fontWeight:'900'}}>{selected?'☑':'＋'}</Text>
+              </Btn>;
+            }}/>}
+          <View style={{flexDirection:'row',justifyContent:'flex-end',gap:10,marginTop:18}}>
+            <Btn onPress={()=>setGroupCreateOpen(false)} style={{padding:13}}><Text style={{color:C.muted,fontWeight:'700'}}>Cancel</Text></Btn>
+            <Btn disabled={groupCreating||groupContactsLoading||selectedGroupIds.length===0} onPress={()=>void createGroup()} style={{backgroundColor:C.green,paddingHorizontal:18,paddingVertical:13,borderRadius:13}}>
+              {groupCreating?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'900'}}>Create group</Text>}
+            </Btn>
+          </View>
+        </View>
+      </View>
+    </Modal>
+
+    <Modal visible={chatDetailsOpen} transparent animationType="slide" onRequestClose={()=>setChatDetailsOpen(false)}>
+      <View style={{flex:1,backgroundColor:'#0008',justifyContent:'flex-end'}}>
+        <View style={{backgroundColor:C.white,borderTopLeftRadius:24,borderTopRightRadius:24,padding:22,maxHeight:'86%'}}>
+          {chatDetailsLoading?<ActivityIndicator color={C.green} style={{padding:30}}/>:chatDetails?<ScrollView>
+            <View style={{alignItems:'center',paddingBottom:18}}>
+              <Avatar label={initials(chatDetails.conversation.kind==='group'?chatDetails.conversation.title:(chatDetails.members.find((member:any)=>member.user_id!==session.user.id)?.display_name||active?.name||'G'))}
+                color={C.green} size={92} uri={chatDetails.conversation.kind==='group'?undefined:(chatDetails.members.find((member:any)=>member.user_id!==session.user.id)?.avatar_signed_url||undefined)}/>
+              <Text style={{fontSize:21,fontWeight:'900',color:C.ink,marginTop:12}}>{chatDetails.conversation.kind==='group'?chatDetails.conversation.title:(chatDetails.members.find((member:any)=>member.user_id!==session.user.id)?.display_name||active?.name)}</Text>
+              <Text style={{fontSize:12,color:C.muted,marginTop:5}}>{chatDetails.conversation.kind==='group'?'Group conversation':'Guftin contact'}</Text>
+            </View>
+            {chatDetails.conversation.kind==='group'?<>
+              <Text style={{fontSize:14,fontWeight:'900',color:C.ink,marginBottom:8}}>Participants · {chatDetails.members.length}</Text>
+              {chatDetails.members.map((member:any)=><View key={member.user_id} style={{flexDirection:'row',alignItems:'center',gap:11,paddingVertical:10,borderBottomWidth:1,borderColor:C.line}}>
+                <Avatar label={initials(member.display_name||member.username||'G')} color={colorFor(member.user_id)} size={42} uri={member.avatar_signed_url}/>
+                <View style={{flex:1}}><Text style={{fontWeight:'800',color:C.ink}}>{member.display_name||'Guftin member'}{member.is_me?' (You)':''}</Text><Text style={{fontSize:11,color:C.muted}}>@{member.username||'member'}</Text></View>
+                <Text style={{fontSize:10,color:C.green,fontWeight:'800'}}>{member.role||'member'}</Text>
+              </View>)}
+            </>:(()=>{
+              const person=chatDetails.members.find((member:any)=>member.user_id!==session.user.id)||{};
+              return <View style={{gap:12}}>
+                <View style={{padding:14,backgroundColor:C.paper,borderRadius:14}}><Text style={{fontSize:10,color:C.muted}}>USERNAME</Text><Text style={{fontSize:15,fontWeight:'900',color:C.ink,marginTop:4}}>@{person.username||'—'}</Text></View>
+                <View style={{padding:14,backgroundColor:C.paper,borderRadius:14}}><Text style={{fontSize:10,color:C.muted}}>ABOUT</Text><Text style={{fontSize:14,color:C.ink,marginTop:4}}>{person.about||'No about information added.'}</Text></View>
+                <View style={{padding:14,backgroundColor:C.paper,borderRadius:14}}><Text style={{fontSize:10,color:C.muted}}>STATUS</Text><Text style={{fontSize:14,color:C.ink,marginTop:4}}>{person.is_online?'Online now':person.last_seen_at?'Last seen '+timeLabel(person.last_seen_at):'Offline'}</Text></View>
+              </View>;
+            })()}
+          </ScrollView>:<Text style={{color:C.muted}}>No details available.</Text>}
+          <Btn onPress={()=>setChatDetailsOpen(false)} style={{backgroundColor:C.green,padding:14,borderRadius:14,alignItems:'center',marginTop:16}}><Text style={{color:'#fff',fontWeight:'900'}}>Close</Text></Btn>
+        </View>
+      </View>
+    </Modal>
+
     <Modal visible={settingsOpen} transparent animationType="slide" onRequestClose={()=>setSettingsOpen(false)}>
       <View style={{flex:1,backgroundColor:'#0008',justifyContent:'flex-end'}}><View style={{backgroundColor:C.white,borderTopLeftRadius:24,borderTopRightRadius:24,padding:22}}>
         <Text style={{fontSize:21,fontWeight:'900',color:C.ink}}>Guftin settings</Text>
@@ -1472,6 +1635,7 @@ function GuftinApp() {
           <Text style={{fontSize:20,fontWeight:'900',color:C.ink}}>Find a Guftin user</Text>
           <Text style={{color:C.muted,lineHeight:19,marginTop:7,marginBottom:16}}>Search by their exact username. Example: ali_786</Text>
           <TextInput value={contactUsername} onChangeText={v=>setContactUsername(v.toLowerCase().replace(/[^a-z0-9_]/g,''))} autoCapitalize="none" placeholder="Username (without @)" style={{backgroundColor:C.paper,borderRadius:14,padding:15,color:C.ink}}/>
+          <Btn onPress={()=>{setAddOpen(false);void openGroupCreator();}} style={{padding:12,alignSelf:'flex-start',marginTop:12}}><Text style={{color:C.green,fontWeight:'800'}}>👥 Create a group instead</Text></Btn>
           <View style={{flexDirection:'row',justifyContent:'flex-end',gap:10,marginTop:18}}>
             <Btn onPress={()=>setAddOpen(false)} style={{padding:13}}><Text style={{color:C.muted,fontWeight:'700'}}>Cancel</Text></Btn>
             <Btn disabled={adding} onPress={addContact} style={{backgroundColor:C.green,paddingHorizontal:18,paddingVertical:13,borderRadius:13}}>{adding?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'800'}}>Find and add</Text>}</Btn>
