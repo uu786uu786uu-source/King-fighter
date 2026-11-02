@@ -1,6 +1,6 @@
 {
   "name": "guftin-mobile",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "main": "expo/AppEntry",
   "scripts": {
@@ -37,7 +37,8 @@
     "expo-av": "~16.0.7",
     "expo-media-library": "~18.2.0",
     "expo-notifications": "~0.32.12",
-    "expo-constants": "~18.0.13"
+    "expo-constants": "~18.0.13",
+    "react-native-google-mobile-ads": "16.0.3"
   },
   "devDependencies": {
     "@types/react": "~19.1.10",
