@@ -33,7 +33,7 @@ module.exports = ({ config }) => ({
   },
   name: "Guftin",
   slug: "guftin",
-  version: "1.4.0",
+  version: "1.4.1",
   orientation: "portrait",
   userInterfaceStyle: "light",
   // Keep the registered callback scheme so Google/email auth redirects keep working.
@@ -42,7 +42,7 @@ module.exports = ({ config }) => ({
   android: {
     ...config.android,
     package: "com.guftin.app",
-    versionCode: 5,
+    versionCode: 6,
     adaptiveIcon: {
       foregroundImage: "./assets/guftin-icon.png",
       backgroundColor: "#031522"
@@ -57,7 +57,7 @@ module.exports = ({ config }) => ({
   ios: {
     ...config.ios,
     bundleIdentifier: "com.guftin.app",
-    buildNumber: "5",
+    buildNumber: "6",
     icon: "./assets/guftin-icon.png",
     supportsTablet: true,
     infoPlist: {
