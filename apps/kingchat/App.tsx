@@ -466,10 +466,23 @@ export default function App() {
           const old=prev[m.conversation_id]||[];
           return {...prev,[m.conversation_id]:old.some(x=>x.id===m.id)?old:[...old,item]};
         });
-        if(showReadReceipts&&activeConversationIdRef.current===m.conversation_id && m.sender_id!==session.user.id){
-          void supabase.rpc('kc_mark_conversation_read',{p_conversation_id:m.conversation_id});
+        if(m.sender_id!==session.user.id){
+          void supabase.from('kc_message_receipts').insert({message_id:m.id,user_id:session.user.id});
+          if(showReadReceipts&&activeConversationIdRef.current===m.conversation_id){
+            void supabase.rpc('kc_mark_conversation_read',{p_conversation_id:m.conversation_id});
+          }
+          if(mediaAutoDownload&&['image','video'].includes(m.message_type)){
+            void saveMediaToGallery(item,false);
+          }
         }
         void loadInbox();
+      })
+      .on('postgres_changes',{event:'UPDATE',schema:'public',table:'kc_messages'},payload=>{
+        const updated=payload.new as any;
+        if(updated.deleted_at){
+          setMessages(prev=>({...prev,[updated.conversation_id]:(prev[updated.conversation_id]||[]).map(item=>item.id===updated.id?{...item,deleted_at:updated.deleted_at,body:null,attachment_url:null}:item)}));
+          void loadInbox();
+        }
       })
       .on('postgres_changes',{event:'UPDATE',schema:'public',table:'kc_conversation_members'},payload=>{
         const member=payload.new as any;
@@ -524,17 +537,29 @@ export default function App() {
       setIncomingCall(null);setOutgoingCall(null);setLiveCall(null);
       void supabase.from('kc_profiles').update({is_online:false,last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
     };
-  },[session,loadProfile,loadInbox,resolveMessage,joinCall,respondToCall,onlineVisibility,autoSync,syncIntervalSeconds,showReadReceipts]);
+  },[session,loadProfile,loadInbox,resolveMessage,joinCall,respondToCall,onlineVisibility,autoSync,syncIntervalSeconds,showReadReceipts,mediaAutoDownload]);
 
   const loadMessages=useCallback(async(conversationId:string)=>{
     if(!session) return;
     const {data,error}=await supabase.from('kc_messages')
-      .select('id,conversation_id,sender_id,body,message_type,attachment_url,created_at')
-      .eq('conversation_id',conversationId).is('deleted_at',null)
+      .select('id,conversation_id,sender_id,body,message_type,attachment_url,created_at,deleted_at')
+      .eq('conversation_id',conversationId)
       .order('created_at',{ascending:true}).limit(200);
     if(error){Alert.alert('Messages could not load',error.message);return;}
-    const resolved=await Promise.all((data||[]).map((m:any)=>resolveMessage(m)));
+    const {data:hiddenRows}=await supabase.from('kc_message_hidden').select('message_id').eq('user_id',session.user.id);
+    const hidden=new Set((hiddenRows||[]).map((row:any)=>row.message_id));
+    const visibleRows=(data||[]).filter((message:any)=>!hidden.has(message.id));
+    const resolved=await Promise.all(visibleRows.map((m:any)=>resolveMessage(m)));
     setMessages(prev=>({...prev,[conversationId]:resolved}));
+    const ownMessageIds=visibleRows.filter((m:any)=>m.sender_id===session.user.id&&!m.deleted_at).map((m:any)=>m.id);
+    const {data:memberList}=await supabase.from('kc_conversation_members').select('user_id,last_read_at').eq('conversation_id',conversationId);
+    const peerMember=(memberList||[]).find((member:any)=>member.user_id!==session.user.id);
+    if(peerMember&&ownMessageIds.length){
+      const {data:receipts}=await supabase.from('kc_message_receipts').select('message_id,delivered_at').eq('user_id',peerMember.user_id).in('message_id',ownMessageIds);
+      const receiptMap:Record<string,string>={};
+      (receipts||[]).forEach((row:any)=>{receiptMap[row.message_id]=row.delivered_at;});
+      setDeliveredByMessage(prev=>({...prev,...receiptMap}));
+    }
     const [{data:memberRows,error:memberError},{error:readError}]=await Promise.all([
       supabase.from('kc_conversation_members')
         .select('user_id,last_read_at')
@@ -561,6 +586,8 @@ export default function App() {
 
   const openChat=async(chat:Chat)=>{
     setPeerLastReadAt(null);
+    await supabase.from('kc_conversation_members').update({hidden_at:null})
+      .eq('conversation_id',chat.id).eq('user_id',session.user.id);
     setActive(chat);
     await loadMessages(chat.id);
   };
@@ -1006,19 +1033,20 @@ export default function App() {
         <Avatar label={active.avatar} color={active.color} size={43} online={active.online} uri={active.avatarUrl}/>
         <View style={{flex:1,marginLeft:11}}>
           <Text style={{fontWeight:'900',fontSize:15,color:C.ink}}>{active.name}</Text>
-          <Text style={{fontSize:11,color:e2eeStatus==='ready'?C.green:C.muted}}>{active.online?'● online · ':''}{outgoingCall?'Calling…':e2eeStatus==='ready'?'🔒 Encrypted text & media · unverified keys':'Setting up secure chat…'}</Text>
+          <Text style={{fontSize:11,color:active.online?C.green:C.muted}}>{outgoingCall?'Calling…':active.online?'● online':'Guftin chat'}</Text>
         </View>
         <Btn disabled={callBusy||!!outgoingCall} onPress={()=>void startCall('voice')} style={{backgroundColor:C.mint,borderRadius:15,width:56,height:58,alignItems:'center',justifyContent:'center',opacity:callBusy?0.5:1,borderWidth:1,borderColor:'#cce9dc'}}><Text style={{fontSize:20,color:C.green}}>☎</Text><Text style={{fontSize:10,fontWeight:'900',color:C.green}}>Call</Text></Btn>
         <Btn disabled={callBusy||!!outgoingCall} onPress={()=>void startCall('video')} style={{backgroundColor:C.mint,borderRadius:15,width:56,height:58,alignItems:'center',justifyContent:'center',opacity:callBusy?0.5:1,borderWidth:1,borderColor:'#cce9dc'}}><Text style={{fontSize:19,color:C.green}}>▣</Text><Text style={{fontSize:10,fontWeight:'900',color:C.green}}>Video</Text></Btn>
       </View>
       <FlatList data={list} keyExtractor={m=>m.id} contentContainerStyle={{padding:18,gap:12,flexGrow:1,justifyContent:list.length?'flex-end':'center'}}
         ListEmptyComponent={<Text style={{textAlign:'center',color:C.muted}}>No messages yet. Send the first message.</Text>}
-        renderItem={({item})=><View style={{alignSelf:item.mine?'flex-end':'flex-start',maxWidth:'84%',backgroundColor:item.mine?'#dff4e8':C.white,padding:13,borderRadius:17,borderTopRightRadius:item.mine?5:17,borderTopLeftRadius:item.mine?17:5}}>
-          {item.message_type==='image'&&item.attachment_url?<Image source={{uri:item.attachment_url}} style={{width:210,height:210,borderRadius:12}} resizeMode="cover"/>:item.message_type==='video'&&item.attachment_url?<VideoBubble uri={item.attachment_url}/>:item.message_type==='audio'&&item.attachment_url?<AudioBubble uri={item.attachment_url}/>:<Text style={{color:C.ink,fontSize:14,lineHeight:21}}>{item.body||'Attachment'}</Text>}
+        renderItem={({item})=><TouchableOpacity activeOpacity={1} onLongPress={()=>deleteMessage(item)} delayLongPress={420} style={{alignSelf:item.mine?'flex-end':'flex-start',maxWidth:'84%',backgroundColor:item.mine?'#dff4e8':C.white,padding:13,borderRadius:17,borderTopRightRadius:item.mine?5:17,borderTopLeftRadius:item.mine?17:5}}>
+          {item.deleted_at?<Text style={{fontSize:12,color:C.muted,fontStyle:'italic'}}>This message was deleted</Text>:item.message_type==='image'&&item.attachment_url?<Image source={{uri:item.attachment_url}} style={{width:210,height:210,borderRadius:12}} resizeMode="cover"/>:item.message_type==='video'&&item.attachment_url?<VideoBubble uri={item.attachment_url}/>:item.message_type==='audio'&&item.attachment_url?<AudioBubble uri={item.attachment_url}/>:<Text style={{color:C.ink,fontSize:14,lineHeight:21}}>{item.body||'Attachment'}</Text>}
+          {!item.deleted_at&&['image','video'].includes(item.message_type)&&item.attachment_url?<Btn onPress={()=>void saveMediaToGallery(item)} style={{marginTop:7,paddingVertical:6,paddingHorizontal:9,borderRadius:9,backgroundColor:C.paper,alignSelf:'flex-start'}}><Text style={{fontSize:11,color:C.green,fontWeight:'800'}}>↓ Save to gallery</Text></Btn>:null}
           <Text style={{textAlign:'right',fontSize:9,color:C.muted,marginTop:5}}>
-            {timeLabel(item.created_at)}{item.mine ? " · " + (showReadReceipts && peerLastReadAt && new Date(peerLastReadAt).getTime() >= new Date(item.created_at).getTime() ? "✓✓ Seen" : "✓ Sent") : ""}
+            {timeLabel(item.created_at)}{item.mine ? " · " + (showReadReceipts && peerLastReadAt && new Date(peerLastReadAt).getTime() >= new Date(item.created_at).getTime() ? "✓✓ Read" : deliveredByMessage[item.id] ? "✓✓ Delivered" : "✓ Sent") : ""}
           </Text>
-        </View>}/>
+        </TouchableOpacity>}/>
       <KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':undefined}>
         <View style={{flexDirection:'row',alignItems:'center',padding:11,gap:8,backgroundColor:C.white}}>
           <Btn disabled={sending} onPress={sendMedia} style={{width:42,height:42,borderRadius:15,backgroundColor:C.paper,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:23,color:C.green}}>＋</Text></Btn>
@@ -1047,7 +1075,7 @@ export default function App() {
       {loading&&chats.length===0?<View style={{flex:1,alignItems:'center',justifyContent:'center'}}><ActivityIndicator color={C.green}/><Text style={{color:C.muted,marginTop:10}}>Loading your conversations…</Text></View>:
         <FlatList data={visible} keyExtractor={x=>x.id} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={C.green}/>} contentContainerStyle={{paddingHorizontal:13,paddingBottom:25,flexGrow:1}}
           ListEmptyComponent={<View style={{alignItems:'center',padding:35,marginTop:50}}><Avatar label="K" color={C.green} size={64}/><Text style={{fontSize:17,fontWeight:'900',color:C.ink,marginTop:15}}>No conversations yet</Text><Text style={{color:C.muted,textAlign:'center',marginTop:7,lineHeight:20}}>Tap ＋ and search by a person's unique username to start a real chat.</Text><Btn onPress={()=>setAddOpen(true)} style={{backgroundColor:C.green,paddingHorizontal:22,paddingVertical:13,borderRadius:14,marginTop:18}}><Text style={{color:'#fff',fontWeight:'800'}}>Find by username</Text></Btn></View>}
-          renderItem={({item})=><Btn onPress={()=>openChat(item)} style={{flexDirection:'row',alignItems:'center',padding:10,gap:12,borderRadius:17}}>
+          renderItem={({item})=><Btn onPress={()=>openChat(item)} onLongPress={()=>Alert.alert('Chat options',item.name,[{text:'Delete chat for me',style:'destructive',onPress:()=>void hideChat(item)},{text:'Cancel',style:'cancel'}])} style={{flexDirection:'row',alignItems:'center',padding:10,gap:12,borderRadius:17}}>
             <Avatar label={item.avatar} color={item.color} online={item.online} uri={item.avatarUrl}/>
             <View style={{flex:1,borderBottomWidth:1,borderColor:C.line,paddingBottom:14,paddingTop:2}}>
               <View style={{flexDirection:'row',justifyContent:'space-between'}}><Text style={{fontWeight:'800',color:C.ink,fontSize:14}}>{item.name}</Text><Text style={{fontSize:10,color:C.muted}}>{item.time}</Text></View>
