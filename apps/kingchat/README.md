@@ -38,3 +38,13 @@ This release implements email/password auth, a Google OAuth flow, username profi
 - The Supabase `guftin-push` Edge Function sends generic message/call notifications after a message/call is created. No message text is included in the notification payload.
 - Users can save individual photo/video messages to their gallery, or enable auto-save in Settings. Gallery access is requested by the OS when needed.
 - Normal push alerts are not a native full-screen call UI. Background call acceptance still requires platform CallKit/Android Telecom integration and device testing.
+
+
+## AdMob (test mode by default)
+
+- The build includes Google's official TEST App IDs and TEST banner unit by default.
+- Banner ads appear on the main tabs; chat, call, and sign-in screens do not display a banner.
+- Requests are non-personalized and content-rated conservatively.
+- Live AdMob monetization is intentionally not enabled by default. Google's publisher rules require the AdMob account holder to be at least 18; a parent/guardian may apply with their own Google Account and payments are issued to that person.
+- For an approved adult-managed publisher account only, set `ADMOB_ANDROID_APP_ID`, `ADMOB_IOS_APP_ID`, and `EXPO_PUBLIC_ADMOB_BANNER_UNIT_ID` in the build environment. The unit ID must be a Banner-format unit. Keep these outside Git.
+- The two Ad Unit IDs in the screenshots are not used in this test build because the screenshots do not show which format each unit belongs to. Do not use a non-banner unit in the banner placement.
