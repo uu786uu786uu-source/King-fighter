@@ -1096,8 +1096,11 @@ export default function App() {
 
   return <SafeAreaView style={{flex:1,backgroundColor:C.white}}>
     <StatusBar barStyle="dark-content"/>
-    <View style={{paddingHorizontal:22,paddingTop:10,paddingBottom:15,flexDirection:'row',alignItems:'center',justifyContent:'space-between'}}>
-      <View><Heading>{pageTitle}</Heading><Text style={{color:C.muted,fontSize:12,marginTop:4}}>{tab==='Chats'?'Your real conversations':tab==='You'?'Your Guftin ID':'Guftin'}</Text></View>
+    <View style={{paddingHorizontal:18,paddingTop:10,paddingBottom:15,flexDirection:'row',alignItems:'center',justifyContent:'space-between'}}>
+      <View style={{flexDirection:'row',alignItems:'center',gap:10}}>
+        <Btn onPress={()=>setTab('You')}><Avatar label={initials(profile?.display_name||'G')} color={C.green} size={40} uri={profileAvatarUrl}/></Btn>
+        <View><Heading>{pageTitle}</Heading><Text style={{color:C.muted,fontSize:12,marginTop:4}}>{tab==='Chats'?'Your real conversations':tab==='You'?'Your Guftin ID':'Guftin'}</Text></View>
+      </View>
       <View style={{flexDirection:'row',gap:9}}>
         <Btn onPress={()=>setSettingsOpen(true)} style={{backgroundColor:C.paper,width:42,height:42,borderRadius:15,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:19,color:C.green}}>⚙</Text></Btn>
         {tab==='Chats'?<Btn onPress={()=>setSearching(!searching)} style={{backgroundColor:C.paper,width:42,height:42,borderRadius:15,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:19}}>⌕</Text></Btn>:null}
@@ -1139,10 +1142,31 @@ export default function App() {
           {status.media_signed_url?(status.media_url?.toLowerCase().match(/\.(mp4|mov|m4v)$/)?<VideoBubble uri={status.media_signed_url}/>:<Image source={{uri:status.media_signed_url}} style={{width:210,height:190,borderRadius:14,marginTop:8}} resizeMode="cover"/>):null}
           {status.caption?<Text style={{color:C.ink,lineHeight:20,marginTop:5}}>{status.caption}</Text>:null}
           <Text style={{color:C.muted,fontSize:10,marginTop:5}}>{timeLabel(status.created_at)}</Text>
+          {status.user_id===session.user.id?<View style={{marginTop:8,padding:10,borderRadius:12,backgroundColor:C.paper}}>
+            <Text style={{fontSize:11,color:C.green,fontWeight:'900'}}>◉ {status.view_count||0} views  ·  ♥ {status.like_count||0} likes</Text>
+            {status.viewer_names?.length?<Text style={{fontSize:10,color:C.muted,marginTop:4}}>Seen by: {status.viewer_names.join(', ')}</Text>:null}
+          </View>:<Btn onPress={()=>void toggleStatusLike(status)} style={{alignSelf:'flex-start',marginTop:9,paddingHorizontal:12,paddingVertical:7,borderRadius:12,backgroundColor:status.liked_by_me?'#ffe8ed':C.mint}}>
+            <Text style={{fontSize:11,fontWeight:'900',color:status.liked_by_me?'#c74768':C.green}}>{status.liked_by_me?'♥ Liked':'♡ Like status'}</Text>
+          </Btn>}
         </View>
       </View>)}
     </ScrollView>:null}
-    {tab==='Calls'?<View style={{flex:1,alignItems:'center',justifyContent:'center',padding:32}}><Text style={{fontSize:18,fontWeight:'900',color:C.ink}}>Guftin calls</Text><Text style={{textAlign:'center',color:C.muted,marginTop:8,lineHeight:20}}>Open a direct chat and tap the phone or video icon to invite the other member. Both phones must be online. LiveKit server credentials are required to connect the media stream.</Text></View>:null}
+    {tab==='Calls'?<ScrollView contentContainerStyle={{padding:18,paddingBottom:30}}>
+      <View style={{backgroundColor:C.paper,borderRadius:18,padding:16,marginBottom:16}}>
+        <Text style={{fontSize:18,fontWeight:'900',color:C.ink}}>Call history</Text>
+        <Text style={{fontSize:11,color:C.muted,marginTop:5}}>Your recent voice and video calls</Text>
+      </View>
+      {callHistory.length===0?<Text style={{color:C.muted,textAlign:'center',padding:32}}>No calls yet. Start a call from any direct chat.</Text>:callHistory.map((call:any)=><View key={call.id} style={{flexDirection:'row',alignItems:'center',gap:12,padding:13,borderBottomWidth:1,borderColor:C.line}}>
+        <View style={{width:43,height:43,borderRadius:15,backgroundColor:C.mint,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:19,color:C.green}}>{call.call_type==='video'?'▣':'☎'}</Text></View>
+        <View style={{flex:1}}>
+          <Text style={{fontWeight:'900',color:C.ink}}>{call.peer_name}</Text>
+          <Text style={{fontSize:11,color:C.muted,marginTop:3}}>{call.outgoing?'Outgoing':'Incoming'} {call.call_type==='video'?'video':'voice'} call · {call.status}</Text>
+          <Text style={{fontSize:10,color:C.muted,marginTop:3}}>{timeLabel(call.started_at||call.ended_at||'')}</Text>
+        </View>
+        <Text style={{color:call.status==='accepted'||call.status==='ended'?C.green:C.muted,fontSize:11,fontWeight:'800'}}>{call.status==='missed'?'Missed':call.status==='declined'?'Declined':call.status==='ringing'?'Ringing':'Done'}</Text>
+      </View>)}
+      <Text style={{fontSize:10,color:C.muted,marginTop:15,lineHeight:16}}>Incoming calls while the app is closed need push notification credentials and native call-screen integration. Call history works independently.</Text>
+    </ScrollView>:null}
     {tab==='You'?<ScrollView contentContainerStyle={{padding:22}}>
       <View style={{alignItems:'center',padding:25,backgroundColor:C.paper,borderRadius:22}}>
         <Btn onPress={chooseProfilePhoto} style={{alignItems:'center'}}><Avatar label={initials(profile?.display_name||session.user.email||'KC')} color={C.green} size={88} uri={profileAvatarUrl}/><Text style={{color:C.green,fontWeight:'800',fontSize:12,marginTop:8}}>{profileUploading?'Uploading…':'Change profile photo'}</Text></Btn>
@@ -1176,6 +1200,12 @@ export default function App() {
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Show online status</Text><Text style={{color:C.muted,fontSize:11}}>Let contacts see when you are online</Text></View><Switch value={onlineVisibility} onValueChange={setOnlineVisibility} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Read receipts</Text><Text style={{color:C.muted,fontSize:11}}>Show seen status on messages</Text></View><Switch value={showReadReceipts} onValueChange={setShowReadReceipts} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Automatic message sync</Text><Text style={{color:C.muted,fontSize:11}}>Refresh while Guftin is open</Text></View><Switch value={autoSync} onValueChange={setAutoSync} trackColor={{true:C.green}}/></View>
+        <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Auto-save incoming photos/videos</Text><Text style={{color:C.muted,fontSize:11}}>Save new media to your gallery automatically</Text></View><Switch value={mediaAutoDownload} onValueChange={setMediaAutoDownload} trackColor={{true:C.green}}/></View>
+        <Text style={{color:C.ink,fontWeight:'800',marginTop:12}}>App theme</Text>
+        <View style={{flexDirection:'row',flexWrap:'wrap',gap:8,marginTop:10}}>
+          {([['emerald','#087e6c','Emerald'],['ocean','#2476d2','Ocean'],['violet','#7950c8','Violet'],['sunset','#d45b42','Sunset'],['night','#101a2b','Night']] as any[]).map(([name,color,label])=><Btn key={name} onPress={()=>setThemeName(name)} style={{paddingHorizontal:13,paddingVertical:10,borderRadius:13,backgroundColor:color,borderWidth:themeName===name?3:0,borderColor:'#f2c75c'}}><Text style={{color:'#fff',fontWeight:'900',fontSize:11}}>{label}</Text></Btn>)}
+        </View>
+        <Text style={{fontSize:10,color:C.muted,marginTop:10}}>Gallery access is requested only when you save media or enable auto-save.</Text>
         <Text style={{color:C.ink,fontWeight:'800',marginTop:10}}>Sync interval</Text><View style={{flexDirection:'row',gap:8,marginTop:10}}>{[3,5,10].map(seconds=><Btn key={seconds} onPress={()=>setSyncIntervalSeconds(seconds)} style={{flex:1,padding:12,borderRadius:12,backgroundColor:syncIntervalSeconds===seconds?C.green:C.paper,alignItems:'center'}}><Text style={{color:syncIntervalSeconds===seconds?'#fff':C.ink,fontWeight:'800'}}>{seconds}s</Text></Btn>)}</View>
         <Btn onPress={()=>setSettingsOpen(false)} style={{backgroundColor:C.green,padding:15,borderRadius:14,alignItems:'center',marginTop:20}}><Text style={{color:'#fff',fontWeight:'900'}}>Done</Text></Btn>
       </View></View>
