@@ -9,8 +9,10 @@ import { supabase } from './src/lib/supabase';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import * as ImagePicker from 'expo-image-picker';
-import * as MediaLibrary from 'expo-media-library/legacy';
+import * as MediaLibrary from 'expo-media-library';
 import { Audio } from 'expo-av';
+import Constants from 'expo-constants';
+import * as Notifications from 'expo-notifications';
 import { File, Paths } from 'expo-file-system';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import * as ExpoCrypto from 'expo-crypto';
@@ -20,6 +22,7 @@ import { Track } from 'livekit-client';
 
 WebBrowser.maybeCompleteAuthSession();
 registerGlobals();
+Notifications.setNotificationHandler({handleNotification:async()=>({shouldShowAlert:true,shouldPlaySound:true,shouldSetBadge:true})});
 
 let C:any = { ink:'#102b27', muted:'#82938e', green:'#087e6c', mint:'#e5f5ee', paper:'#f5f8f6', white:'#fff', line:'#e9efec', red:'#b94e48' };
 const THEMES:any = {
@@ -145,6 +148,8 @@ export default function App() {
   const [liveCall,setLiveCall]=useState<any>(null);
   const [callBusy,setCallBusy]=useState(false);
   const [callHistory,setCallHistory]=useState<any[]>([]);
+  const [pushEnabled,setPushEnabled]=useState(false);
+  const [pushBusy,setPushBusy]=useState(false);
   const [themeName,setThemeName]=useState('emerald');
   const [deliveredByMessage,setDeliveredByMessage]=useState<Record<string,string>>({});
   const hiddenMessageIds=useRef(new Set<string>());
@@ -389,6 +394,46 @@ export default function App() {
     }
     return {...raw,body,attachment_url,mine:raw.sender_id===session?.user?.id,deleted_at:raw.deleted_at||null};
   },[session,deviceIdentity]);
+
+  const enablePushNotifications=async()=>{
+    if(!session||pushBusy)return;
+    setPushBusy(true);
+    try{
+      if(Platform.OS==='android'){
+        await Notifications.setNotificationChannelAsync('messages',{
+          name:'Messages and calls',
+          importance:Notifications.AndroidImportance.MAX,
+          vibrationPattern:[0,250,250,250],
+          sound:'default'
+        });
+      }
+      let permission=await Notifications.getPermissionsAsync();
+      if(!permission.granted)permission=await Notifications.requestPermissionsAsync();
+      if(!permission.granted)throw new Error('Notification permission was not granted.');
+      const config=Constants.expoConfig as any;
+      const projectId=(Constants as any).easConfig?.projectId||config?.extra?.eas?.projectId||process.env.EXPO_PUBLIC_EAS_PROJECT_ID;
+      if(!projectId){
+        throw new Error('Push notifications are not linked to an EAS project yet. The app needs an EAS project ID and FCM/APNs credentials before background delivery can be enabled.');
+      }
+      const token=(await Notifications.getExpoPushTokenAsync({projectId})).data;
+      const {error}=await supabase.from('kc_device_tokens').upsert({
+        user_id:session.user.id,token,platform:Platform.OS
+      },{onConflict:'token'});
+      if(error)throw error;
+      setPushEnabled(true);
+      Alert.alert('Notifications enabled','This device is registered for Guftin message and call alerts. Delivery still depends on the platform push credentials.');
+    }catch(e:any){
+      setPushEnabled(false);
+      Alert.alert('Notifications not enabled',e?.message||'Please check notification permissions and push credentials.');
+    }finally{setPushBusy(false);}
+  };
+
+  const dispatchPush=async(kind:'message'|'call',id:string)=>{
+    try{
+      const {error}=await supabase.functions.invoke('guftin-push',{body:kind==='message'?{kind,message_id:id}:{kind,call_id:id}});
+      if(error)console.warn('Push dispatch:',error.message);
+    }catch(error:any){console.warn('Push dispatch unavailable:',error?.message||error);}
+  };
 
   const saveMediaToGallery=async(item:any,showFeedback=true)=>{
     if(!item?.attachment_url||!['image','video'].includes(item.message_type))return;
@@ -640,6 +685,7 @@ export default function App() {
       }).select('id,conversation_id,sender_id,message_type,created_at').single();
       if(error)throw error;
       setDraft('');
+      void dispatchPush('message',data.id);
       const item:Message={...data,body,mine:true};
       setMessages(prev=>{
         const old=prev[conversationId]||[];
@@ -670,6 +716,7 @@ export default function App() {
     if(uploadError)throw uploadError;
     const {data,error}=await supabase.from('kc_messages').insert({conversation_id:active.id,sender_id:session.user.id,body:encrypted.body,message_type:'audio',attachment_url:objectPath}).select('id,conversation_id,sender_id,message_type,attachment_url,created_at').single();
     if(error){await supabase.storage.from('chat-media').remove([objectPath]);throw error;}
+    void dispatchPush('message',data.id);
     const item=await resolveMessage({...data,body:encrypted.body});
     setMessages(prev=>({...prev,[active.id]:[...(prev[active.id]||[]),item]}));void loadInbox();
   };
@@ -748,6 +795,7 @@ export default function App() {
         await supabase.storage.from('chat-media').remove([objectPath]);
         throw error;
       }
+      void dispatchPush('message',data.id);
       const item:Message={...data,body:messageType==='video'?'Video':'Photo',attachment_url:asset.uri,mine:true};
       setMessages(prev=>{
         const old=prev[active.id]||[];
@@ -783,6 +831,7 @@ export default function App() {
       }).select('id,conversation_id,caller_id,callee_id,call_type,status').single();
       if(error)throw error;
       setOutgoingCall(data);
+      void dispatchPush('call',data.id);
       Alert.alert('Calling','Calling '+active.name+'. Keep Guftin open while they answer.');
     }catch(e:any){
       Alert.alert('Call could not start',e?.message||'Please try again.');
