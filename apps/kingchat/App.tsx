@@ -1431,6 +1431,37 @@ function GuftinApp() {
           </Btn>
         </View>
       </KeyboardAvoidingView>
+    <Modal visible={chatDetailsOpen} transparent animationType="slide" onRequestClose={()=>setChatDetailsOpen(false)}>
+      <View style={{flex:1,backgroundColor:'#0008',justifyContent:'flex-end'}}>
+        <View style={{backgroundColor:C.white,borderTopLeftRadius:24,borderTopRightRadius:24,padding:22,maxHeight:'86%'}}>
+          {chatDetailsLoading?<ActivityIndicator color={C.green} style={{padding:30}}/>:chatDetails?<ScrollView>
+            <View style={{alignItems:'center',paddingBottom:18}}>
+              <Avatar label={initials(chatDetails.conversation.kind==='group'?chatDetails.conversation.title:(chatDetails.members.find((member:any)=>member.user_id!==session.user.id)?.display_name||active.name||'G'))}
+                color={C.green} size={92} uri={chatDetails.conversation.kind==='group'?undefined:(chatDetails.members.find((member:any)=>member.user_id!==session.user.id)?.avatar_signed_url||undefined)}/>
+              <Text style={{fontSize:21,fontWeight:'900',color:C.ink,marginTop:12}}>{chatDetails.conversation.kind==='group'?chatDetails.conversation.title:(chatDetails.members.find((member:any)=>member.user_id!==session.user.id)?.display_name||active.name)}</Text>
+              <Text style={{fontSize:12,color:C.muted,marginTop:5}}>{chatDetails.conversation.kind==='group'?'Group conversation':'Guftin contact'}</Text>
+            </View>
+            {chatDetails.conversation.kind==='group'?<>
+              <Text style={{fontSize:14,fontWeight:'900',color:C.ink,marginBottom:8}}>Participants · {chatDetails.members.length}</Text>
+              {chatDetails.members.map((member:any)=><View key={member.user_id} style={{flexDirection:'row',alignItems:'center',gap:11,paddingVertical:10,borderBottomWidth:1,borderColor:C.line}}>
+                <Avatar label={initials(member.display_name||member.username||'G')} color={colorFor(member.user_id)} size={42} uri={member.avatar_signed_url}/>
+                <View style={{flex:1}}><Text style={{fontWeight:'800',color:C.ink}}>{member.display_name||'Guftin member'}{member.is_me?' (You)':''}</Text><Text style={{fontSize:11,color:C.muted}}>@{member.username||'member'}</Text></View>
+                <Text style={{fontSize:10,color:C.green,fontWeight:'800'}}>{member.role||'member'}</Text>
+              </View>)}
+            </>:(()=>{
+              const person=chatDetails.members.find((member:any)=>member.user_id!==session.user.id)||{};
+              return <View style={{gap:12}}>
+                <View style={{padding:14,backgroundColor:C.paper,borderRadius:14}}><Text style={{fontSize:10,color:C.muted}}>USERNAME</Text><Text style={{fontSize:15,fontWeight:'900',color:C.ink,marginTop:4}}>@{person.username||'—'}</Text></View>
+                <View style={{padding:14,backgroundColor:C.paper,borderRadius:14}}><Text style={{fontSize:10,color:C.muted}}>ABOUT</Text><Text style={{fontSize:14,color:C.ink,marginTop:4}}>{person.about||'No about information added.'}</Text></View>
+                <View style={{padding:14,backgroundColor:C.paper,borderRadius:14}}><Text style={{fontSize:10,color:C.muted}}>STATUS</Text><Text style={{fontSize:14,color:C.ink,marginTop:4}}>{person.is_online?'Online now':person.last_seen_at?'Last seen '+timeLabel(person.last_seen_at):'Offline'}</Text></View>
+              </View>;
+            })()}
+          </ScrollView>:<Text style={{color:C.muted}}>No details available.</Text>}
+          <Btn onPress={()=>setChatDetailsOpen(false)} style={{backgroundColor:C.green,padding:14,borderRadius:14,alignItems:'center',marginTop:16}}><Text style={{color:'#fff',fontWeight:'900'}}>Close</Text></Btn>
+        </View>
+      </View>
+    </Modal>
+
     </SafeAreaView>;
   }
 
@@ -1567,37 +1598,6 @@ function GuftinApp() {
               {groupCreating?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'900'}}>Create group</Text>}
             </Btn>
           </View>
-        </View>
-      </View>
-    </Modal>
-
-    <Modal visible={chatDetailsOpen} transparent animationType="slide" onRequestClose={()=>setChatDetailsOpen(false)}>
-      <View style={{flex:1,backgroundColor:'#0008',justifyContent:'flex-end'}}>
-        <View style={{backgroundColor:C.white,borderTopLeftRadius:24,borderTopRightRadius:24,padding:22,maxHeight:'86%'}}>
-          {chatDetailsLoading?<ActivityIndicator color={C.green} style={{padding:30}}/>:chatDetails?<ScrollView>
-            <View style={{alignItems:'center',paddingBottom:18}}>
-              <Avatar label={initials(chatDetails.conversation.kind==='group'?chatDetails.conversation.title:(chatDetails.members.find((member:any)=>member.user_id!==session.user.id)?.display_name||active?.name||'G'))}
-                color={C.green} size={92} uri={chatDetails.conversation.kind==='group'?undefined:(chatDetails.members.find((member:any)=>member.user_id!==session.user.id)?.avatar_signed_url||undefined)}/>
-              <Text style={{fontSize:21,fontWeight:'900',color:C.ink,marginTop:12}}>{chatDetails.conversation.kind==='group'?chatDetails.conversation.title:(chatDetails.members.find((member:any)=>member.user_id!==session.user.id)?.display_name||active?.name)}</Text>
-              <Text style={{fontSize:12,color:C.muted,marginTop:5}}>{chatDetails.conversation.kind==='group'?'Group conversation':'Guftin contact'}</Text>
-            </View>
-            {chatDetails.conversation.kind==='group'?<>
-              <Text style={{fontSize:14,fontWeight:'900',color:C.ink,marginBottom:8}}>Participants · {chatDetails.members.length}</Text>
-              {chatDetails.members.map((member:any)=><View key={member.user_id} style={{flexDirection:'row',alignItems:'center',gap:11,paddingVertical:10,borderBottomWidth:1,borderColor:C.line}}>
-                <Avatar label={initials(member.display_name||member.username||'G')} color={colorFor(member.user_id)} size={42} uri={member.avatar_signed_url}/>
-                <View style={{flex:1}}><Text style={{fontWeight:'800',color:C.ink}}>{member.display_name||'Guftin member'}{member.is_me?' (You)':''}</Text><Text style={{fontSize:11,color:C.muted}}>@{member.username||'member'}</Text></View>
-                <Text style={{fontSize:10,color:C.green,fontWeight:'800'}}>{member.role||'member'}</Text>
-              </View>)}
-            </>:(()=>{
-              const person=chatDetails.members.find((member:any)=>member.user_id!==session.user.id)||{};
-              return <View style={{gap:12}}>
-                <View style={{padding:14,backgroundColor:C.paper,borderRadius:14}}><Text style={{fontSize:10,color:C.muted}}>USERNAME</Text><Text style={{fontSize:15,fontWeight:'900',color:C.ink,marginTop:4}}>@{person.username||'—'}</Text></View>
-                <View style={{padding:14,backgroundColor:C.paper,borderRadius:14}}><Text style={{fontSize:10,color:C.muted}}>ABOUT</Text><Text style={{fontSize:14,color:C.ink,marginTop:4}}>{person.about||'No about information added.'}</Text></View>
-                <View style={{padding:14,backgroundColor:C.paper,borderRadius:14}}><Text style={{fontSize:10,color:C.muted}}>STATUS</Text><Text style={{fontSize:14,color:C.ink,marginTop:4}}>{person.is_online?'Online now':person.last_seen_at?'Last seen '+timeLabel(person.last_seen_at):'Offline'}</Text></View>
-              </View>;
-            })()}
-          </ScrollView>:<Text style={{color:C.muted}}>No details available.</Text>}
-          <Btn onPress={()=>setChatDetailsOpen(false)} style={{backgroundColor:C.green,padding:14,borderRadius:14,alignItems:'center',marginTop:16}}><Text style={{color:'#fff',fontWeight:'900'}}>Close</Text></Btn>
         </View>
       </View>
     </Modal>
