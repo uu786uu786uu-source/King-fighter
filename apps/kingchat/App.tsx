@@ -192,6 +192,15 @@ function GuftinApp() {
   const [about,setAbout]=useState('');
   const [savingProfile,setSavingProfile]=useState(false);
   const handledAuthUrls=useRef(new Set<string>());
+  const signedMediaCache=useRef(new Map<string,{url:string;expiresAt:number}>());
+  const getSignedMediaUrl=useCallback(async(path:string):Promise<string|null>=>{
+    const cached=signedMediaCache.current.get(path);
+    if(cached&&cached.expiresAt>Date.now()+60000)return cached.url;
+    const {data,error}=await supabase.storage.from('chat-media').createSignedUrl(path,60*60*24);
+    if(error||!data?.signedUrl)return null;
+    signedMediaCache.current.set(path,{url:data.signedUrl,expiresAt:Date.now()+23*60*60*1000});
+    return data.signedUrl;
+  },[]);
 
   useEffect(()=>{
     let active=true;
@@ -324,10 +333,10 @@ function GuftinApp() {
     setProfileUsername(data?.username||session.user.user_metadata?.username||'');
     setAbout(data?.about||'');
     setProfileAvatarPath(data?.avatar_url||'');
-    if(data?.avatar_url){const {data:avatarData}=await supabase.storage.from('chat-media').createSignedUrl(data.avatar_url,60*60*24);setProfileAvatarUrl(avatarData?.signedUrl||'');}
+    if(data?.avatar_url){setProfileAvatarUrl(await getSignedMediaUrl(data.avatar_url)||'');}
     else setProfileAvatarUrl('');
     setProfileReady(true);
-  },[session]);
+  },[session,getSignedMediaUrl]);
 
   const loadInbox=useCallback(async()=>{
     if(!session) return;
@@ -362,7 +371,7 @@ function GuftinApp() {
         const peer=peers.length?profileMap.get(peers[0].user_id):null;
         const name=conv.kind==='group'?(conv.title||'Group chat'):(peer?.display_name||'Guftin member');
         const avatarPath=conv.kind==='group'?(conv.photo_url||null):(peer?.avatar_url||null);
-        const avatarUrl=avatarPath?(await supabase.storage.from('chat-media').createSignedUrl(avatarPath,60*60*24)).data?.signedUrl||undefined:undefined;
+        const avatarUrl=avatarPath?(await getSignedMediaUrl(avatarPath))||undefined:undefined;
         const last=latest.get(row.conversation_id);
         const readThrough=Math.max(
           row.last_read_at?new Date(row.last_read_at).getTime():0,
@@ -392,7 +401,7 @@ function GuftinApp() {
     }catch(e:any){
       Alert.alert('Inbox could not load',e?.message||'Please check your connection and try again.');
     }finally{setLoading(false);}
-  },[session,deviceIdentity]);
+  },[session,deviceIdentity,getSignedMediaUrl]);
 
   const loadCallHistory=useCallback(async()=>{
     if(!session)return;
@@ -415,8 +424,7 @@ function GuftinApp() {
   const resolveMessage=useCallback(async(raw:any):Promise<Message>=>{
     let attachment_url=raw.attachment_url||null;
     if(attachment_url){
-      const {data,error}=await supabase.storage.from('chat-media').createSignedUrl(attachment_url,60*60*24);
-      attachment_url=error?null:(data?.signedUrl||null);
+      attachment_url=await getSignedMediaUrl(attachment_url);
     }
     let body=raw.body||null;
     if(typeof body==='string'&&body.startsWith(E2EE_MEDIA_PREFIX)){
@@ -445,7 +453,7 @@ function GuftinApp() {
       }
     }
     return {...raw,body,attachment_url,mine:raw.sender_id===session?.user?.id,deleted_at:raw.deleted_at||null};
-  },[session,deviceIdentity]);
+  },[session,deviceIdentity,getSignedMediaUrl]);
 
   const enablePushNotifications=async()=>{
     if(!session||pushBusy)return;
@@ -497,7 +505,8 @@ function GuftinApp() {
 
   const dispatchPush=async(kind:'message'|'call'|'status',id:string)=>{
     try{
-      const {error}=await supabase.functions.invoke('guftin-push',{body:kind==='message'?{kind,message_id:id}:{kind,call_id:id}});
+      const payload=kind==='message'?{kind,message_id:id}:kind==='call'?{kind,call_id:id}:{kind,status_id:id};
+      const {error}=await supabase.functions.invoke('guftin-push',{body:payload});
       if(error)console.warn('Push dispatch:',error.message);
     }catch(error:any){console.warn('Push dispatch unavailable:',error?.message||error);}
   };
@@ -993,8 +1002,8 @@ function GuftinApp() {
       const bytes=new Uint8Array(await file.arrayBuffer()),objectPath=session.user.id+'/profile/'+Date.now()+'_'+ExpoCrypto.randomUUID()+'.jpg';
       const {error}=await supabase.storage.from('chat-media').upload(objectPath,bytes,{contentType:'image/jpeg',upsert:false});bytes.fill(0);
       if(error)throw error;
-      const {data}=await supabase.storage.from('chat-media').createSignedUrl(objectPath,60*60*24);
-      setProfileAvatarPath(objectPath);setProfileAvatarUrl(data?.signedUrl||asset.uri);
+      const signedUrl=await getSignedMediaUrl(objectPath);
+      setProfileAvatarPath(objectPath);setProfileAvatarUrl(signedUrl||asset.uri);
     }catch(e:any){Alert.alert('Photo not saved',e?.message||'Please try again.');}
     finally{setProfileUploading(false);}
   };
@@ -1142,7 +1151,7 @@ function GuftinApp() {
         .select('id,display_name,username,avatar_url').in('id',ids).order('display_name');
       if(peopleError)throw peopleError;
       const contacts=await Promise.all((people||[]).map(async(person:any)=>{
-        const avatar=person.avatar_url?(await supabase.storage.from('chat-media').createSignedUrl(person.avatar_url,60*60*24)).data?.signedUrl||undefined:undefined;
+        const avatar=person.avatar_url?(await getSignedMediaUrl(person.avatar_url))||undefined:undefined;
         return {...person,avatar_signed_url:avatar};
       }));
       setGroupContacts(contacts);
@@ -1200,7 +1209,7 @@ function GuftinApp() {
       const peopleMap=new Map((people||[]).map((person:any)=>[person.id,person]));
       const details=await Promise.all((members||[]).map(async(member:any)=>{
         const person:any=peopleMap.get(member.user_id)||{};
-        const avatar=person.avatar_url?(await supabase.storage.from('chat-media').createSignedUrl(person.avatar_url,60*60*24)).data?.signedUrl||null:null;
+        const avatar=person.avatar_url?(await getSignedMediaUrl(person.avatar_url))||null:null;
         return {...member,...person,avatar_signed_url:avatar,is_me:member.user_id===session.user.id};
       }));
       setChatDetails({conversation,members:details});
@@ -1251,9 +1260,9 @@ function GuftinApp() {
       :{data:[]};
     const statusActorMap=new Map((statusActors||[]).map((person:any)=>[person.id,person]));
     const mapped=await Promise.all(rows.map(async row=>{
-      const signed=row.media_url?(await supabase.storage.from('chat-media').createSignedUrl(row.media_url,60*60*24)).data?.signedUrl||null:null;
+      const signed=row.media_url?await getSignedMediaUrl(row.media_url):null;
       const avatarPath=(people.get(row.user_id) as any)?.avatar_url||null;
-      const avatarSigned=avatarPath?(await supabase.storage.from('chat-media').createSignedUrl(avatarPath,60*60*24)).data?.signedUrl||null:null;
+      const avatarSigned=avatarPath?await getSignedMediaUrl(avatarPath):null;
       const views=(viewsResult.data||[]).filter((view:any)=>view.status_id===row.id);
       const likes=(likesResult.data||[]).filter((like:any)=>like.status_id===row.id);
       return {
@@ -1271,7 +1280,7 @@ function GuftinApp() {
       };
     }));
     setStatuses(mapped);
-  },[session]);
+  },[session,getSignedMediaUrl]);
 
   const toggleStatusLike=async(status:any)=>{
     if(!session||status.user_id===session.user.id)return;
