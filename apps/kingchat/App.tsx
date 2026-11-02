@@ -1348,7 +1348,7 @@ export default function App() {
     </ScrollView>:null}
     {adsReady&&tab!=='You'?<View style={{alignItems:'center',justifyContent:'center',backgroundColor:C.white,minHeight:50,paddingTop:4}}>
       <BannerAd
-        unitId={__DEV__?TestIds.BANNER:(process.env.EXPO_PUBLIC_ADMOB_BANNER_UNIT_ID||TestIds.BANNER)}
+        unitId={__DEV__?TestIds.BANNER:(process.env.EXPO_PUBLIC_ADMOB_BANNER_UNIT_ID||'ca-app-pub-3116820002792089/9054692427')}
         size={BannerAdSize.BANNER}
         requestOptions={{requestNonPersonalizedAdsOnly:true}}
         onAdFailedToLoad={error=>console.warn('AdMob banner failed:',error?.message||error)}
