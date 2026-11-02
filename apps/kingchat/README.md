@@ -29,3 +29,12 @@ Expo React Native app using Supabase Auth, Postgres, Realtime and RLS.
 ## Current limitations
 
 This release implements email/password auth, a Google OAuth flow, username profiles, username contact discovery, direct chat history, message sending, Realtime updates and profile editing. Google sign-in works only after Google OAuth credentials and the redirect allow-list are configured in Supabase. Voice/video calling, status publishing, media uploads, push notifications, account deletion UX and end-to-end encryption are not implemented yet. Do not present the app as a finished WhatsApp replacement until those areas are built and independently tested.
+
+
+## Push notifications and gallery saving
+
+- In Guftin Settings, enable **Push notifications** to request OS permission and register this installation in `kc_device_tokens`.
+- Set `EXPO_PUBLIC_EAS_PROJECT_ID` to the project's actual EAS project ID and configure Android FCM v1 credentials and iOS APNs credentials in EAS before expecting notifications while the app is backgrounded or closed.
+- The Supabase `guftin-push` Edge Function sends generic message/call notifications after a message/call is created. No message text is included in the notification payload.
+- Users can save individual photo/video messages to their gallery, or enable auto-save in Settings. Gallery access is requested by the OS when needed.
+- Normal push alerts are not a native full-screen call UI. Background call acceptance still requires platform CallKit/Android Telecom integration and device testing.
