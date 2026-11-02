@@ -154,6 +154,7 @@ export default function App() {
   const [themeName,setThemeName]=useState('emerald');
   const [deliveredByMessage,setDeliveredByMessage]=useState<Record<string,string>>({});
   const hiddenMessageIds=useRef(new Set<string>());
+  const handledNotificationResponses=useRef(new Set<string>());
   const joiningCallIds=useRef(new Set<string>());
   Object.assign(C,THEMES[themeName]||THEMES.emerald);
 
@@ -550,6 +551,8 @@ export default function App() {
           return {...prev,[m.conversation_id]:old.some(x=>x.id===m.id)?old:[...old,item]};
         });
         if(m.sender_id!==session.user.id){
+          void supabase.from('kc_conversation_members').update({hidden_at:null})
+            .eq('conversation_id',m.conversation_id).eq('user_id',session.user.id);
           void supabase.from('kc_message_receipts').insert({message_id:m.id,user_id:session.user.id});
           if(showReadReceipts&&activeConversationIdRef.current===m.conversation_id){
             void supabase.rpc('kc_mark_conversation_read',{p_conversation_id:m.conversation_id});
@@ -624,7 +627,10 @@ export default function App() {
 
   useEffect(()=>{
     if(!session)return;
-    const subscription=Notifications.addNotificationResponseReceivedListener(response=>{
+    const handleNotificationResponse=(response:any)=>{
+      const responseId=response.notification?.request?.identifier;
+      if(responseId&&handledNotificationResponses.current.has(responseId))return;
+      if(responseId)handledNotificationResponses.current.add(responseId);
       const data=response.notification.request.content.data as any;
       if(data?.type==='incoming_call'&&typeof data.call_id==='string'){
         void supabase.from('kc_call_logs').select('id,conversation_id,caller_id,callee_id,call_type,status')
@@ -650,6 +656,10 @@ export default function App() {
           void loadInbox();
         }
       }
+    };
+    const subscription=Notifications.addNotificationResponseReceivedListener(handleNotificationResponse);
+    void Notifications.getLastNotificationResponseAsync().then(response=>{
+      if(response)handleNotificationResponse(response);
     });
     return ()=>subscription.remove();
   },[session,respondToCall,loadInbox]);
