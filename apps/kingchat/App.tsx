@@ -151,7 +151,6 @@ export default function App() {
   const [callBusy,setCallBusy]=useState(false);
   const [callHistory,setCallHistory]=useState<any[]>([]);
   const [adsReady,setAdsReady]=useState(false);
-  const [adLoadFailed,setAdLoadFailed]=useState(false);
   const [pushEnabled,setPushEnabled]=useState(false);
   const [pushBusy,setPushBusy]=useState(false);
   const [themeName,setThemeName]=useState('emerald');
@@ -1345,8 +1344,7 @@ export default function App() {
         unitId={__DEV__?TestIds.BANNER:(process.env.EXPO_PUBLIC_ADMOB_BANNER_UNIT_ID||TestIds.BANNER)}
         size={BannerAdSize.BANNER}
         requestOptions={{requestNonPersonalizedAdsOnly:true}}
-        onAdFailedToLoad={error=>{setAdLoadFailed(true);console.warn('AdMob banner failed:',error?.message||error);}}
-        onAdLoaded={()=>setAdLoadFailed(false)}
+        onAdFailedToLoad={error=>console.warn('AdMob banner failed:',error?.message||error)}
       />
     </View>:null}
     <View style={{height:78,paddingBottom:Platform.OS==='android'?6:2,borderTopWidth:1,borderColor:C.line,flexDirection:'row',alignItems:'center',justifyContent:'space-around',backgroundColor:C.white,elevation:8}}>
