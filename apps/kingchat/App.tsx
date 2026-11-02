@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
-  ActivityIndicator, Alert, AppState, FlatList, Image, KeyboardAvoidingView, Modal,
-  Platform, RefreshControl, SafeAreaView, ScrollView, StatusBar, Switch, Text,
-  TextInput, TouchableOpacity, View
+  ActivityIndicator, Alert, AppState, BackHandler, FlatList, Image, KeyboardAvoidingView, Modal,
+  Platform, RefreshControl, ScrollView, StatusBar, Switch, Text, TextInput, ToastAndroid,
+  TouchableOpacity, View
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from './src/lib/supabase';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
@@ -105,9 +106,11 @@ function VideoBubble({uri}:{uri:string}) {
   return <VideoView player={player} style={{width:230,height:165,borderRadius:12}} nativeControls allowsFullscreen contentFit="contain"/>;
 }
 
-export default function App() {
+function GuftinApp() {
+  const insets=useSafeAreaInsets();
   const [tab,setTab]=useState('Chats');
   const [session,setSession]=useState<any>(null);
+  const [authRestoring,setAuthRestoring]=useState(true);
   const [profile,setProfile]=useState<any>(null);
   const [profileReady,setProfileReady]=useState(false);
   const [chats,setChats]=useState<Chat[]>([]);
@@ -237,12 +240,41 @@ export default function App() {
   },[]);
 
   useEffect(()=>{
-    supabase.auth.getSession().then(({data})=>setSession(data.session));
-    const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,next)=>setSession(next));
+    let mounted=true;
+    void supabase.auth.getSession().then(({data,error})=>{
+      if(!mounted)return;
+      if(error)console.warn('Session restore:',error.message);
+      setSession(data.session);
+    }).catch(error=>console.warn('Session restore failed:',error?.message||error))
+      .finally(()=>{if(mounted)setAuthRestoring(false);});
+    const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,next)=>{
+      if(!mounted)return;
+      setSession(next);
+      setAuthRestoring(false);
+    });
     const linkSub=Linking.addEventListener('url',({url})=>{void completeAuthUrl(url);});
     Linking.getInitialURL().then(url=>{if(url) void completeAuthUrl(url);});
-    return ()=>{subscription.unsubscribe();linkSub.remove();};
+    return ()=>{mounted=false;subscription.unsubscribe();linkSub.remove();};
   },[completeAuthUrl]);
+
+  useEffect(()=>{
+    const onHardwareBack=()=>{
+      if(liveCall){
+        ToastAndroid.show('End the call with the in-app button first.',ToastAndroid.SHORT);
+        return true;
+      }
+      if(statusComposer){setStatusComposer(false);return true;}
+      if(addOpen){setAddOpen(false);return true;}
+      if(settingsOpen){setSettingsOpen(false);return true;}
+      if(active){setActive(null);return true;}
+      if(searching){setSearching(false);setSearch('');return true;}
+      if(tab!=='Chats'){setTab('Chats');return true;}
+      ToastAndroid.show('Guftin is open. Use Home to keep it running in background.',ToastAndroid.SHORT);
+      return true;
+    };
+    const subscription=BackHandler.addEventListener('hardwareBackPress',onHardwareBack);
+    return ()=>subscription.remove();
+  },[liveCall,statusComposer,addOpen,settingsOpen,active,searching,tab]);
 
   useEffect(()=>{
     let cancelled=false;
@@ -1090,13 +1122,21 @@ export default function App() {
     const ids=rows.map(row=>row.id);
     if(!ids.length){setStatuses([]);return;}
 
-    // Record each contact status view once; a duplicate is harmless.
-    for(const row of rows){
-      if(row.user_id!==session.user.id){
-        void supabase.from('kc_status_views').insert({status_id:row.id,viewer_id:session.user.id});
+    // Record only the first view from this account; avoid repeated writes on refresh.
+    const viewableIds=rows.filter(row=>row.user_id!==session.user.id).map(row=>row.id);
+    if(viewableIds.length){
+      const {data:existingViews}=await supabase.from('kc_status_views')
+        .select('status_id').eq('viewer_id',session.user.id).in('status_id',viewableIds);
+      const seenIds=new Set((existingViews||[]).map((view:any)=>view.status_id));
+      const unseenIds=viewableIds.filter(id=>!seenIds.has(id));
+      if(unseenIds.length){
+        const {error:viewError}=await supabase.from('kc_status_views').upsert(
+          unseenIds.map(status_id=>({status_id,viewer_id:session.user.id})),
+          {onConflict:'status_id,viewer_id',ignoreDuplicates:true}
+        );
+        if(viewError)console.warn('Status view not recorded:',viewError.message);
       }
     }
-    const ownStatusIds=rows.filter(row=>row.user_id===session.user.id).map(row=>row.id);
     const [peopleResult,viewsResult,likesResult]=await Promise.all([
       supabase.from('kc_profiles').select('id,display_name,username').in('id',[...new Set(rows.map(row=>row.user_id))]),
       supabase.from('kc_status_views').select('status_id,viewer_id,viewed_at').in('status_id',ids),
@@ -1145,8 +1185,40 @@ export default function App() {
     await loadStatuses();
   };
 
+  useEffect(()=>{
+    if(!session||tab!=='Updates')return;
+    void loadStatuses();
+    const channel=supabase.channel('guftin-status-'+session.user.id)
+      .on('postgres_changes',{event:'*',schema:'public',table:'kc_status_updates'},()=>{void loadStatuses();})
+      .on('postgres_changes',{event:'*',schema:'public',table:'kc_status_views'},()=>{void loadStatuses();})
+      .on('postgres_changes',{event:'*',schema:'public',table:'kc_status_likes'},()=>{void loadStatuses();})
+      .subscribe((status,error)=>{
+        if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'||status==='CLOSED'){
+          console.warn('Status realtime unavailable; automatic refresh will use polling.',error?.message||status);
+        }
+      });
+    const timer=setInterval(()=>{
+      if(AppState.currentState==='active')void loadStatuses();
+    },30000);
+    const appState=AppState.addEventListener('change',state=>{
+      if(state==='active')void loadStatuses();
+    });
+    return ()=>{
+      clearInterval(timer);
+      appState.remove();
+      void supabase.removeChannel(channel);
+    };
+  },[session,tab,loadStatuses]);
+
   const visible=useMemo(()=>chats.filter(c=>c.name.toLowerCase().includes(search.toLowerCase())),[chats,search]);
   const pageTitle=tab==='Chats'?'Messages':tab==='Updates'?'Updates':tab==='Calls'?'Calls':'You';
+
+  if(authRestoring){
+    return <SafeAreaView style={{flex:1,backgroundColor:C.paper,alignItems:'center',justifyContent:'center'}}>
+      <ActivityIndicator color={C.green} size="large"/>
+      <Text style={{color:C.muted,marginTop:12}}>Restoring your Guftin session…</Text>
+    </SafeAreaView>;
+  }
 
   if(!session){
     return <SafeAreaView style={{flex:1,backgroundColor:C.paper,padding:25,justifyContent:'center'}}>
@@ -1250,9 +1322,9 @@ export default function App() {
     </SafeAreaView>;
   }
 
-  return <SafeAreaView style={{flex:1,backgroundColor:C.white}}>
+  return <SafeAreaView edges={['top','left','right']} style={{flex:1,backgroundColor:C.white}}>
     <StatusBar barStyle="dark-content"/>
-    <View style={{paddingHorizontal:18,paddingTop:10,paddingBottom:15,flexDirection:'row',alignItems:'center',justifyContent:'space-between'}}>
+    <View style={{paddingHorizontal:18,paddingTop:14,paddingBottom:13,flexDirection:'row',alignItems:'center',justifyContent:'space-between'}}>
       <View style={{flexDirection:'row',alignItems:'center',gap:10}}>
         <Btn onPress={()=>setTab('You')}><Avatar label={initials(profile?.display_name||'G')} color={C.green} size={40} uri={profileAvatarUrl}/></Btn>
         <View><Heading>{pageTitle}</Heading><Text style={{color:C.muted,fontSize:12,marginTop:4}}>{tab==='Chats'?'Your real conversations':tab==='You'?'Your Guftin ID':'Guftin'}</Text></View>
@@ -1354,7 +1426,7 @@ export default function App() {
         onAdFailedToLoad={error=>console.warn('AdMob banner failed:',error?.message||error)}
       />
     </View>:null}
-    <View style={{height:78,paddingBottom:Platform.OS==='android'?6:2,borderTopWidth:1,borderColor:C.line,flexDirection:'row',alignItems:'center',justifyContent:'space-around',backgroundColor:C.white,elevation:8}}>
+    <View style={{height:66+insets.bottom,paddingTop:5,paddingBottom:Math.max(insets.bottom,6),borderTopWidth:1,borderColor:C.line,flexDirection:'row',alignItems:'center',justifyContent:'space-around',backgroundColor:C.white,elevation:8}}>
       {([['Chats','▤'],['Updates','◉'],['Calls','⌕'],['You','●']] as string[][]).map(([t,icon])=><Btn key={t} onPress={()=>setTab(t)} style={{alignItems:'center',minWidth:64}}><Text style={{fontSize:19,color:tab===t?C.green:C.muted}}>{icon}</Text><Text style={{fontSize:10,fontWeight:tab===t?'900':'600',color:tab===t?C.green:C.muted,marginTop:3}}>{t}</Text></Btn>)}
     </View>
 
@@ -1408,4 +1480,8 @@ export default function App() {
       </View>
     </Modal>
   </SafeAreaView>;
+}
+
+export default function App(){
+  return <SafeAreaProvider><GuftinApp/></SafeAreaProvider>;
 }
