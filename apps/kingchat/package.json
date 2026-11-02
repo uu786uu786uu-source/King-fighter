@@ -34,7 +34,10 @@
     "livekit-client": "2.23.0",
     "sharp": "0.35.5",
     "expo-splash-screen": "~0.30.10",
-    "expo-av": "~16.0.7"
+    "expo-av": "~16.0.7",
+    "expo-media-library": "~18.2.0",
+    "expo-notifications": "~0.32.12",
+    "expo-constants": "~18.0.13"
   },
   "devDependencies": {
     "@types/react": "~19.1.10",
