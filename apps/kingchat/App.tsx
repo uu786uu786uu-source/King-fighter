@@ -1103,9 +1103,14 @@ export default function App() {
       supabase.from('kc_status_likes').select('status_id,user_id,created_at').in('status_id',ids)
     ]);
     const people=new Map((peopleResult.data||[]).map((person:any)=>[person.id,person]));
-    const viewerIds=[...new Set((viewsResult.data||[]).map((view:any)=>view.viewer_id))];
-    const {data:viewers}=viewerIds.length?await supabase.from('kc_profiles').select('id,display_name,username').in('id',viewerIds):{data:[]};
-    const viewerMap=new Map((viewers||[]).map((person:any)=>[person.id,person]));
+    const statusActorIds=[...new Set([
+      ...(viewsResult.data||[]).map((view:any)=>view.viewer_id),
+      ...(likesResult.data||[]).map((like:any)=>like.user_id)
+    ])];
+    const {data:statusActors}=statusActorIds.length
+      ?await supabase.from('kc_profiles').select('id,display_name,username').in('id',statusActorIds)
+      :{data:[]};
+    const statusActorMap=new Map((statusActors||[]).map((person:any)=>[person.id,person]));
     const mapped=await Promise.all(rows.map(async row=>{
       const signed=row.media_url?(await supabase.storage.from('chat-media').createSignedUrl(row.media_url,60*60*24)).data?.signedUrl||null:null;
       const views=(viewsResult.data||[]).filter((view:any)=>view.status_id===row.id);
@@ -1116,7 +1121,8 @@ export default function App() {
         username:(people.get(row.user_id) as any)?.username||'',
         media_signed_url:signed,
         view_count:views.length,
-        viewer_names:views.map((view:any)=>(viewerMap.get(view.viewer_id) as any)?.display_name||'Guftin member'),
+        viewer_names:views.map((view:any)=>(statusActorMap.get(view.viewer_id) as any)?.display_name||'Guftin member'),
+        liker_names:likes.map((like:any)=>(statusActorMap.get(like.user_id) as any)?.display_name||'Guftin member'),
         like_count:likes.length,
         liked_by_me:likes.some((like:any)=>like.user_id===session.user.id)
       };
@@ -1295,6 +1301,7 @@ export default function App() {
           {status.user_id===session.user.id?<View style={{marginTop:8,padding:10,borderRadius:12,backgroundColor:C.paper}}>
             <Text style={{fontSize:11,color:C.green,fontWeight:'900'}}>◉ {status.view_count||0} views  ·  ♥ {status.like_count||0} likes</Text>
             {status.viewer_names?.length?<Text style={{fontSize:10,color:C.muted,marginTop:4}}>Seen by: {status.viewer_names.join(', ')}</Text>:null}
+            {status.liker_names?.length?<Text style={{fontSize:10,color:C.muted,marginTop:4}}>Liked by: {status.liker_names.join(', ')}</Text>:null}
           </View>:<Btn onPress={()=>void toggleStatusLike(status)} style={{alignSelf:'flex-start',marginTop:9,paddingHorizontal:12,paddingVertical:7,borderRadius:12,backgroundColor:status.liked_by_me?'#ffe8ed':C.mint}}>
             <Text style={{fontSize:11,fontWeight:'900',color:status.liked_by_me?'#c74768':C.green}}>{status.liked_by_me?'♥ Liked':'♡ Like status'}</Text>
           </Btn>}
