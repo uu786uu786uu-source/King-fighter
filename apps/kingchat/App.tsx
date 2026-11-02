@@ -30,7 +30,7 @@ const THEMES:any = {
   night:{ink:'#edf3ff',muted:'#9baac0',green:'#77b9ff',mint:'#223d5d',paper:'#101a2b',white:'#1a2940',line:'#2a3b54',red:'#ff8894'}
 };
 type Chat = { id:string; name:string; avatar:string; avatarUrl?:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number };
-type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; attachment_url?:string|null; created_at:string; mine:boolean };
+type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; attachment_url?:string|null; created_at:string; mine:boolean; deleted_at?:string|null };
 const AUTH_REDIRECT_URL = 'kingchat://auth/callback';
 const palette = ['#d49a91','#8796c7','#81ad98','#bd8aa8','#c4a47c','#9a91bd'];
 const initials = (s:string) => s.trim().split(/\s+/).slice(0,2).map(x=>x[0]||'').join('').toUpperCase() || 'KC';
@@ -336,6 +336,24 @@ export default function App() {
       Alert.alert('Inbox could not load',e?.message||'Please check your connection and try again.');
     }finally{setLoading(false);}
   },[session,deviceIdentity]);
+
+  const loadCallHistory=useCallback(async()=>{
+    if(!session)return;
+    const {data,error}=await supabase.from('kc_call_logs')
+      .select('id,conversation_id,caller_id,callee_id,call_type,status,started_at,ended_at')
+      .or('caller_id.eq.'+session.user.id+',callee_id.eq.'+session.user.id)
+      .order('started_at',{ascending:false}).limit(100);
+    if(error){console.warn('Call history:',error.message);return;}
+    const rows=(data||[]) as any[];
+    const peers=[...new Set(rows.map(row=>row.caller_id===session.user.id?row.callee_id:row.caller_id).filter(Boolean))];
+    const {data:profiles}=peers.length?await supabase.from('kc_profiles').select('id,display_name,avatar_url').in('id',peers):{data:[]};
+    const profileMap=new Map((profiles||[]).map((p:any)=>[p.id,p]));
+    setCallHistory(rows.map(row=>{
+      const peerId=row.caller_id===session.user.id?row.callee_id:row.caller_id;
+      const peer:any=profileMap.get(peerId);
+      return {...row,peer_name:peer?.display_name||'Guftin member',outgoing:row.caller_id===session.user.id};
+    }));
+  },[session]);
 
   const resolveMessage=useCallback(async(raw:any):Promise<Message>=>{
     let attachment_url=raw.attachment_url||null;
@@ -932,28 +950,44 @@ export default function App() {
       .select('id,user_id,caption,media_url,created_at,expires_at')
       .gt('expires_at',new Date().toISOString())
       .order('created_at',{ascending:false}).limit(100);
-    if(error){
-      Alert.alert('Statuses could not load',error.message);
-      return;
-    }
+    if(error){Alert.alert('Statuses could not load',error.message);return;}
     const rows=(data||[]) as any[];
-    const ids=[...new Set(rows.map(row=>row.user_id))];
+    const ids=rows.map(row=>row.id);
     if(!ids.length){setStatuses([]);return;}
-    const {data:people}=await supabase.from('kc_profiles')
-      .select('id,display_name,username').in('id',ids);
-    const personMap=new Map((people||[]).map((person:any)=>[person.id,person]));
-    const mapped=await Promise.all(rows.map(async row=>({
-      ...row,
-      display_name:(personMap.get(row.user_id) as any)?.display_name||'Guftin member',
-      username:(personMap.get(row.user_id) as any)?.username||'',
-      media_signed_url:row.media_url?(await supabase.storage.from('chat-media').createSignedUrl(row.media_url,60*60*24)).data?.signedUrl||null:null
-    })));
+
+    // Record each contact status view once; a duplicate is harmless.
+    for(const row of rows){
+      if(row.user_id!==session.user.id){
+        void supabase.from('kc_status_views').insert({status_id:row.id,viewer_id:session.user.id});
+      }
+    }
+    const ownStatusIds=rows.filter(row=>row.user_id===session.user.id).map(row=>row.id);
+    const [peopleResult,viewsResult,likesResult]=await Promise.all([
+      supabase.from('kc_profiles').select('id,display_name,username').in('id',[...new Set(rows.map(row=>row.user_id))]),
+      supabase.from('kc_status_views').select('status_id,viewer_id,viewed_at').in('status_id',ids),
+      supabase.from('kc_status_likes').select('status_id,user_id,created_at').in('status_id',ids)
+    ]);
+    const people=new Map((peopleResult.data||[]).map((person:any)=>[person.id,person]));
+    const viewerIds=[...new Set((viewsResult.data||[]).map((view:any)=>view.viewer_id))];
+    const {data:viewers}=viewerIds.length?await supabase.from('kc_profiles').select('id,display_name,username').in('id',viewerIds):{data:[]};
+    const viewerMap=new Map((viewers||[]).map((person:any)=>[person.id,person]));
+    const mapped=await Promise.all(rows.map(async row=>{
+      const signed=row.media_url?(await supabase.storage.from('chat-media').createSignedUrl(row.media_url,60*60*24)).data?.signedUrl||null:null;
+      const views=(viewsResult.data||[]).filter((view:any)=>view.status_id===row.id);
+      const likes=(likesResult.data||[]).filter((like:any)=>like.status_id===row.id);
+      return {
+        ...row,
+        display_name:(people.get(row.user_id) as any)?.display_name||'Guftin member',
+        username:(people.get(row.user_id) as any)?.username||'',
+        media_signed_url:signed,
+        view_count:views.length,
+        viewer_names:views.map((view:any)=>(viewerMap.get(view.viewer_id) as any)?.display_name||'Guftin member'),
+        like_count:likes.length,
+        liked_by_me:likes.some((like:any)=>like.user_id===session.user.id)
+      };
+    }));
     setStatuses(mapped);
   },[session]);
-
-  useEffect(()=>{
-    if(tab==='Updates'&&session)void loadStatuses();
-  },[tab,session,loadStatuses]);
 
   const visible=useMemo(()=>chats.filter(c=>c.name.toLowerCase().includes(search.toLowerCase())),[chats,search]);
   const pageTitle=tab==='Chats'?'Messages':tab==='Updates'?'Updates':tab==='Calls'?'Calls':'You';
