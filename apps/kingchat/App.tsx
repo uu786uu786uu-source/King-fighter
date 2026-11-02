@@ -445,8 +445,22 @@ export default function App() {
           setOutgoingCall((old:any)=>old?.id===call.id?null:old);
           setLiveCall((old:any)=>old?.id===call.id?null:old);
         }
-      }).subscribe();
-    const syncTimer=setInterval(()=>{if(autoSync&&AppState.currentState==='active'){void loadInbox();if(activeConversationIdRef.current)void loadMessagesRef.current?.(activeConversationIdRef.current);}},Math.max(3,syncIntervalSeconds)*1000);
+      }).subscribe((status,error)=>{
+        if(status==='SUBSCRIBED'){
+          console.log('Guftin realtime connected');
+        }else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'||status==='CLOSED'){
+          console.warn('Guftin realtime unavailable; automatic sync will use polling.',error?.message||status);
+        }
+      });
+    // Realtime is the fast path. Polling is a recovery path for devices or
+    // projects where Postgres Changes is not enabled or the socket drops.
+    const syncTimer=setInterval(()=>{
+      if(autoSync&&AppState.currentState==='active'){
+        void loadInbox();
+        const conversationId=activeConversationIdRef.current;
+        if(conversationId)void loadMessagesRef.current?.(conversationId);
+      }
+    },Math.max(3,syncIntervalSeconds)*1000);
     return ()=>{
       clearInterval(syncTimer);
       appState.remove();
@@ -931,15 +945,15 @@ export default function App() {
     const list=messages[active.id]||[];
     return <SafeAreaView style={{flex:1,backgroundColor:C.paper}}>
       <StatusBar barStyle="dark-content"/>
-      <View style={{height:72,backgroundColor:C.white,flexDirection:'row',alignItems:'center',paddingHorizontal:15,borderBottomWidth:1,borderColor:C.line}}>
+      <View style={{minHeight:82,backgroundColor:C.white,flexDirection:'row',alignItems:'center',paddingHorizontal:12,paddingVertical:7,borderBottomWidth:1,borderColor:C.line,elevation:2}}>
         <Btn onPress={()=>setActive(null)} style={{padding:10}}><Text style={{fontSize:24,color:C.ink}}>‹</Text></Btn>
         <Avatar label={active.avatar} color={active.color} size={43} online={active.online} uri={active.avatarUrl}/>
         <View style={{flex:1,marginLeft:11}}>
           <Text style={{fontWeight:'900',fontSize:15,color:C.ink}}>{active.name}</Text>
           <Text style={{fontSize:11,color:e2eeStatus==='ready'?C.green:C.muted}}>{active.online?'● online · ':''}{outgoingCall?'Calling…':e2eeStatus==='ready'?'🔒 Encrypted text & media · unverified keys':'Setting up secure chat…'}</Text>
         </View>
-        <Btn disabled={callBusy||!!outgoingCall} onPress={()=>void startCall('voice')} style={{backgroundColor:C.mint,borderRadius:14,width:52,height:52,alignItems:'center',justifyContent:'center',opacity:callBusy?0.5:1}}><Text style={{fontSize:20,color:C.green}}>☎</Text><Text style={{fontSize:10,fontWeight:'900',color:C.green}}>Call</Text></Btn>
-        <Btn disabled={callBusy||!!outgoingCall} onPress={()=>void startCall('video')} style={{backgroundColor:C.mint,borderRadius:14,width:52,height:52,alignItems:'center',justifyContent:'center',opacity:callBusy?0.5:1}}><Text style={{fontSize:19,color:C.green}}>▣</Text><Text style={{fontSize:10,fontWeight:'900',color:C.green}}>Video</Text></Btn>
+        <Btn disabled={callBusy||!!outgoingCall} onPress={()=>void startCall('voice')} style={{backgroundColor:C.mint,borderRadius:15,width:56,height:58,alignItems:'center',justifyContent:'center',opacity:callBusy?0.5:1,borderWidth:1,borderColor:'#cce9dc'}}><Text style={{fontSize:20,color:C.green}}>☎</Text><Text style={{fontSize:10,fontWeight:'900',color:C.green}}>Call</Text></Btn>
+        <Btn disabled={callBusy||!!outgoingCall} onPress={()=>void startCall('video')} style={{backgroundColor:C.mint,borderRadius:15,width:56,height:58,alignItems:'center',justifyContent:'center',opacity:callBusy?0.5:1,borderWidth:1,borderColor:'#cce9dc'}}><Text style={{fontSize:19,color:C.green}}>▣</Text><Text style={{fontSize:10,fontWeight:'900',color:C.green}}>Video</Text></Btn>
       </View>
       <FlatList data={list} keyExtractor={m=>m.id} contentContainerStyle={{padding:18,gap:12,flexGrow:1,justifyContent:list.length?'flex-end':'center'}}
         ListEmptyComponent={<Text style={{textAlign:'center',color:C.muted}}>No messages yet. Send the first message.</Text>}
@@ -1033,7 +1047,7 @@ export default function App() {
       <Btn onPress={()=>Alert.alert('Privacy','New text messages and photo/video attachments are encrypted on the sending device before upload. Public keys are not yet verified with safety numbers, forward secrecy is not implemented, and this version has not had an independent security audit. Status and calls are not end-to-end encrypted.')} style={{padding:18,borderBottomWidth:1,borderColor:C.line,marginTop:12}}><Text style={{color:C.ink,fontWeight:'700'}}>Privacy and security　›</Text></Btn>
       <Btn onPress={()=>supabase.auth.signOut()} style={{padding:18}}><Text style={{color:C.red,fontWeight:'800'}}>Sign out</Text></Btn>
     </ScrollView>:null}
-    <View style={{height:69,borderTopWidth:1,borderColor:C.line,flexDirection:'row',alignItems:'center',justifyContent:'space-around',backgroundColor:C.white}}>
+    <View style={{height:78,paddingBottom:Platform.OS==='android'?6:2,borderTopWidth:1,borderColor:C.line,flexDirection:'row',alignItems:'center',justifyContent:'space-around',backgroundColor:C.white,elevation:8}}>
       {([['Chats','▤'],['Updates','◉'],['Calls','⌕'],['You','●']] as string[][]).map(([t,icon])=><Btn key={t} onPress={()=>setTab(t)} style={{alignItems:'center',minWidth:64}}><Text style={{fontSize:19,color:tab===t?C.green:C.muted}}>{icon}</Text><Text style={{fontSize:10,fontWeight:tab===t?'900':'600',color:tab===t?C.green:C.muted,marginTop:3}}>{t}</Text></Btn>)}
     </View>
 
