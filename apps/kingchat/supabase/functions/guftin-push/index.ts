@@ -15,7 +15,7 @@ Deno.serve(async (req: Request) => {
 
   const url = Deno.env.get("SUPABASE_URL");
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  const jwt = (req.headers.get("Authorization") || "").replace(/^Bearer\\s+/i, "").trim();
+  const jwt = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
   if (!url || !serviceKey || !jwt) return json({ error: "Push service is not configured." }, 503);
 
   const admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
@@ -23,7 +23,7 @@ Deno.serve(async (req: Request) => {
   const actor = authData?.user;
   if (authError || !actor) return json({ error: "A valid signed-in session is required." }, 401);
 
-  let body: { kind?: string; message_id?: string; call_id?: string };
+  let body: { kind?: string; message_id?: string; call_id?: string; status_id?: string };
   try { body = await req.json(); } catch { return json({ error: "A JSON body is required." }, 400); }
 
   let recipientIds: string[] = [];
@@ -53,8 +53,27 @@ Deno.serve(async (req: Request) => {
     title = row.call_type === "video" ? "Incoming Guftin video call" : "Incoming Guftin voice call";
     message = "A Guftin contact is calling you.";
     data = { type: "incoming_call", call_id: row.id, conversation_id: row.conversation_id, call_type: row.call_type };
+  } else if (body.kind === "status" && body.status_id) {
+    const { data: row, error } = await admin.from("kc_status_updates")
+      .select("id,user_id,expires_at")
+      .eq("id", body.status_id).maybeSingle();
+    if (error || !row || row.user_id !== actor.id || new Date(row.expires_at).getTime() <= Date.now()) {
+      return json({ error: "Active status not found or not owned by this account." }, 404);
+    }
+    const { data: contacts, error: contactsError } = await admin.from("kc_contacts")
+      .select("owner_id,contact_id")
+      .or("owner_id.eq." + actor.id + ",contact_id.eq." + actor.id);
+    if (contactsError) return json({ error: "Could not load status contacts." }, 500);
+    recipientIds = [...new Set((contacts || []).map((item: any) =>
+      item.owner_id === actor.id ? item.contact_id : item.owner_id
+    ).filter((id: string) => id && id !== actor.id))];
+    const { data: profile } = await admin.from("kc_profiles")
+      .select("display_name").eq("id", actor.id).maybeSingle();
+    title = (profile?.display_name || "A Guftin contact") + " shared a status";
+    message = "Tap to view the new status. It expires after 24 hours.";
+    data = { type: "status", status_id: row.id };
   } else {
-    return json({ error: "kind and a valid message_id or call_id are required." }, 400);
+    return json({ error: "kind and a valid message_id, call_id, or status_id are required." }, 400);
   }
 
   if (!recipientIds.length) return json({ sent: 0, reason: "No recipient devices." });
