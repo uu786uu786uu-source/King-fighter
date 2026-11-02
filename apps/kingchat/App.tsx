@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   ActivityIndicator, Alert, AppState, FlatList, Image, KeyboardAvoidingView, Modal,
   Platform, RefreshControl, SafeAreaView, ScrollView, StatusBar, Switch, Text,
@@ -126,7 +127,8 @@ export default function App() {
   const [mediaAutoDownload,setMediaAutoDownload]=useState(false);
   const [onlineVisibility,setOnlineVisibility]=useState(true);
   const [autoSync,setAutoSync]=useState(true);
-  const [syncIntervalSeconds,setSyncIntervalSeconds]=useState(8);
+  const [syncIntervalSeconds,setSyncIntervalSeconds]=useState(4);
+  const [settingsLoaded,setSettingsLoaded]=useState(false);
   const [publishingStatus,setPublishingStatus]=useState(false);
   const [deviceIdentity,setDeviceIdentity]=useState<DeviceIdentity|null>(null);
   const [e2eeStatus,setE2eeStatus]=useState<'loading'|'ready'|'error'>('loading');
@@ -153,6 +155,30 @@ export default function App() {
   const [about,setAbout]=useState('');
   const [savingProfile,setSavingProfile]=useState(false);
   const handledAuthUrls=useRef(new Set<string>());
+
+  useEffect(()=>{
+    let active=true;
+    AsyncStorage.getItem('guftin-preferences').then(raw=>{
+      if(!active)return;
+      if(raw){
+        try{
+          const saved=JSON.parse(raw);
+          if(typeof saved.showReadReceipts==='boolean')setShowReadReceipts(saved.showReadReceipts);
+          if(typeof saved.onlineVisibility==='boolean')setOnlineVisibility(saved.onlineVisibility);
+          if(typeof saved.autoSync==='boolean')setAutoSync(saved.autoSync);
+          if([3,5,10].includes(saved.syncIntervalSeconds))setSyncIntervalSeconds(saved.syncIntervalSeconds);
+          if(typeof saved.mediaAutoDownload==='boolean')setMediaAutoDownload(saved.mediaAutoDownload);
+        }catch{ /* Ignore an outdated or malformed local preferences record. */ }
+      }
+      setSettingsLoaded(true);
+    }).catch(()=>{if(active)setSettingsLoaded(true);});
+    return ()=>{active=false;};
+  },[]);
+
+  useEffect(()=>{
+    if(!settingsLoaded)return;
+    void AsyncStorage.setItem('guftin-preferences',JSON.stringify({showReadReceipts,onlineVisibility,autoSync,syncIntervalSeconds,mediaAutoDownload}));
+  },[settingsLoaded,showReadReceipts,onlineVisibility,autoSync,syncIntervalSeconds,mediaAutoDownload]);
 
   const completeAuthUrl=useCallback(async(url:string)=>{
     if(!url||handledAuthUrls.current.has(url)) return;
@@ -420,7 +446,7 @@ export default function App() {
           setLiveCall((old:any)=>old?.id===call.id?null:old);
         }
       }).subscribe();
-    const syncTimer=setInterval(()=>{if(autoSync&&AppState.currentState==='active'){void loadInbox();if(activeConversationIdRef.current)void loadMessagesRef.current?.(activeConversationIdRef.current);}},syncIntervalSeconds*1000);
+    const syncTimer=setInterval(()=>{if(autoSync&&AppState.currentState==='active'){void loadInbox();if(activeConversationIdRef.current)void loadMessagesRef.current?.(activeConversationIdRef.current);}},Math.max(3,syncIntervalSeconds)*1000);
     return ()=>{
       clearInterval(syncTimer);
       appState.remove();
@@ -912,8 +938,8 @@ export default function App() {
           <Text style={{fontWeight:'900',fontSize:15,color:C.ink}}>{active.name}</Text>
           <Text style={{fontSize:11,color:e2eeStatus==='ready'?C.green:C.muted}}>{active.online?'● online · ':''}{outgoingCall?'Calling…':e2eeStatus==='ready'?'🔒 Encrypted text & media · unverified keys':'Setting up secure chat…'}</Text>
         </View>
-        <Btn disabled={callBusy||!!outgoingCall} onPress={()=>void startCall('voice')} style={{backgroundColor:C.mint,borderRadius:13,paddingHorizontal:10,paddingVertical:8,alignItems:'center',opacity:callBusy?0.5:1}}><Text style={{fontSize:17,color:C.green}}>☎</Text><Text style={{fontSize:9,fontWeight:'800',color:C.green}}>Voice</Text></Btn>
-        <Btn disabled={callBusy||!!outgoingCall} onPress={()=>void startCall('video')} style={{backgroundColor:C.mint,borderRadius:13,paddingHorizontal:10,paddingVertical:8,alignItems:'center',opacity:callBusy?0.5:1}}><Text style={{fontSize:17,color:C.green}}>▣</Text><Text style={{fontSize:9,fontWeight:'800',color:C.green}}>Video</Text></Btn>
+        <Btn disabled={callBusy||!!outgoingCall} onPress={()=>void startCall('voice')} style={{backgroundColor:C.mint,borderRadius:14,width:52,height:52,alignItems:'center',justifyContent:'center',opacity:callBusy?0.5:1}}><Text style={{fontSize:20,color:C.green}}>☎</Text><Text style={{fontSize:10,fontWeight:'900',color:C.green}}>Call</Text></Btn>
+        <Btn disabled={callBusy||!!outgoingCall} onPress={()=>void startCall('video')} style={{backgroundColor:C.mint,borderRadius:14,width:52,height:52,alignItems:'center',justifyContent:'center',opacity:callBusy?0.5:1}}><Text style={{fontSize:19,color:C.green}}>▣</Text><Text style={{fontSize:10,fontWeight:'900',color:C.green}}>Video</Text></Btn>
       </View>
       <FlatList data={list} keyExtractor={m=>m.id} contentContainerStyle={{padding:18,gap:12,flexGrow:1,justifyContent:list.length?'flex-end':'center'}}
         ListEmptyComponent={<Text style={{textAlign:'center',color:C.muted}}>No messages yet. Send the first message.</Text>}
@@ -1018,7 +1044,7 @@ export default function App() {
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Show online status</Text><Text style={{color:C.muted,fontSize:11}}>Let contacts see when you are online</Text></View><Switch value={onlineVisibility} onValueChange={setOnlineVisibility} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Read receipts</Text><Text style={{color:C.muted,fontSize:11}}>Show seen status on messages</Text></View><Switch value={showReadReceipts} onValueChange={setShowReadReceipts} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Automatic message sync</Text><Text style={{color:C.muted,fontSize:11}}>Refresh while Guftin is open</Text></View><Switch value={autoSync} onValueChange={setAutoSync} trackColor={{true:C.green}}/></View>
-        <Text style={{color:C.ink,fontWeight:'800',marginTop:10}}>Sync interval</Text><View style={{flexDirection:'row',gap:8,marginTop:10}}>{[8,15,30].map(seconds=><Btn key={seconds} onPress={()=>setSyncIntervalSeconds(seconds)} style={{flex:1,padding:12,borderRadius:12,backgroundColor:syncIntervalSeconds===seconds?C.green:C.paper,alignItems:'center'}}><Text style={{color:syncIntervalSeconds===seconds?'#fff':C.ink,fontWeight:'800'}}>{seconds}s</Text></Btn>)}</View>
+        <Text style={{color:C.ink,fontWeight:'800',marginTop:10}}>Sync interval</Text><View style={{flexDirection:'row',gap:8,marginTop:10}}>{[3,5,10].map(seconds=><Btn key={seconds} onPress={()=>setSyncIntervalSeconds(seconds)} style={{flex:1,padding:12,borderRadius:12,backgroundColor:syncIntervalSeconds===seconds?C.green:C.paper,alignItems:'center'}}><Text style={{color:syncIntervalSeconds===seconds?'#fff':C.ink,fontWeight:'800'}}>{seconds}s</Text></Btn>)}</View>
         <Btn onPress={()=>setSettingsOpen(false)} style={{backgroundColor:C.green,padding:15,borderRadius:14,alignItems:'center',marginTop:20}}><Text style={{color:'#fff',fontWeight:'900'}}>Done</Text></Btn>
       </View></View>
     </Modal>
