@@ -24,9 +24,16 @@ if (pngIsMissing || svgIsNewer) {
 
 module.exports = ({ config }) => ({
   ...config,
+  extra: {
+    ...(config.extra || {}),
+    eas: {
+      ...(config.extra?.eas || {}),
+      ...(process.env.EXPO_PUBLIC_EAS_PROJECT_ID ? { projectId: process.env.EXPO_PUBLIC_EAS_PROJECT_ID } : {})
+    }
+  },
   name: "Guftin",
   slug: "guftin",
-  version: "1.2.0",
+  version: "1.3.0",
   orientation: "portrait",
   userInterfaceStyle: "light",
   // Keep the registered callback scheme so Google/email auth redirects keep working.
@@ -35,7 +42,7 @@ module.exports = ({ config }) => ({
   android: {
     ...config.android,
     package: "com.guftin.app",
-    versionCode: 3,
+    versionCode: 4,
     adaptiveIcon: {
       foregroundImage: "./assets/guftin-icon.png",
       backgroundColor: "#031522"
@@ -50,7 +57,7 @@ module.exports = ({ config }) => ({
   ios: {
     ...config.ios,
     bundleIdentifier: "com.guftin.app",
-    buildNumber: "3",
+    buildNumber: "4",
     icon: "./assets/guftin-icon.png",
     supportsTablet: true,
     infoPlist: {
