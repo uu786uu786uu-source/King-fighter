@@ -64,6 +64,21 @@ module.exports = ({ config }) => ({
   plugins: [
     ...(config.plugins || []),
     [
+      "expo-media-library",
+      {
+        photosPermission: "Allow Guftin to save photos and videos you choose.",
+        savePhotosPermission: "Allow Guftin to save shared media to your gallery."
+      }
+    ],
+    [
+      "expo-notifications",
+      {
+        color: "#087e6c",
+        defaultChannel: "messages",
+        enableBackgroundRemoteNotifications: true
+      }
+    ],
+    [
       "expo-splash-screen",
       {
         image: "./assets/guftin-icon.png",
