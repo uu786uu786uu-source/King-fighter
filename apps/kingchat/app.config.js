@@ -88,8 +88,8 @@ module.exports = ({ config }) => ({
     [
       "./plugins/with-admob-app-ids",
       {
-        "androidAppId": "ca-app-pub-3940256099942544~3347511713",
-        "iosAppId": "ca-app-pub-3940256099942544~1458002511"
+        "androidAppId": process.env.ADMOB_ANDROID_APP_ID || "ca-app-pub-3940256099942544~3347511713",
+        "iosAppId": process.env.ADMOB_IOS_APP_ID || "ca-app-pub-3940256099942544~1458002511"
       }
     ],
     [
