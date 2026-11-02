@@ -13,6 +13,7 @@ import * as MediaLibrary from 'expo-media-library';
 import { Audio } from 'expo-av';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
+import mobileAds, { BannerAd, BannerAdSize, MaxAdContentRating, TestIds } from 'react-native-google-mobile-ads';
 import { File, Paths } from 'expo-file-system';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import * as ExpoCrypto from 'expo-crypto';
@@ -149,6 +150,8 @@ export default function App() {
   const [liveCall,setLiveCall]=useState<any>(null);
   const [callBusy,setCallBusy]=useState(false);
   const [callHistory,setCallHistory]=useState<any[]>([]);
+  const [adsReady,setAdsReady]=useState(false);
+  const [adLoadFailed,setAdLoadFailed]=useState(false);
   const [pushEnabled,setPushEnabled]=useState(false);
   const [pushBusy,setPushBusy]=useState(false);
   const [themeName,setThemeName]=useState('emerald');
@@ -624,6 +627,17 @@ export default function App() {
       void supabase.from('kc_profiles').update({is_online:false,last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
     };
   },[session,loadProfile,loadInbox,resolveMessage,joinCall,respondToCall,onlineVisibility,autoSync,syncIntervalSeconds,showReadReceipts,mediaAutoDownload]);
+
+  useEffect(()=>{
+    let mounted=true;
+    // Keep ads non-personalized and apply a conservative content rating.
+    mobileAds().setRequestConfiguration({
+      maxAdContentRating: MaxAdContentRating.G
+    }).then(()=>mobileAds().initialize()).then(()=>{
+      if(mounted)setAdsReady(true);
+    }).catch(error=>console.warn('AdMob initialization failed:',error?.message||error));
+    return ()=>{mounted=false;};
+  },[]);
 
   useEffect(()=>{
     if(!session)return;
@@ -1326,6 +1340,15 @@ export default function App() {
       <Btn onPress={()=>Alert.alert('Privacy','New text messages and photo/video attachments are encrypted on the sending device before upload. Public keys are not yet verified with safety numbers, forward secrecy is not implemented, and this version has not had an independent security audit. Status and calls are not end-to-end encrypted.')} style={{padding:18,borderBottomWidth:1,borderColor:C.line,marginTop:12}}><Text style={{color:C.ink,fontWeight:'700'}}>Privacy and security　›</Text></Btn>
       <Btn onPress={()=>supabase.auth.signOut()} style={{padding:18}}><Text style={{color:C.red,fontWeight:'800'}}>Sign out</Text></Btn>
     </ScrollView>:null}
+    {adsReady&&tab!=='You'?<View style={{alignItems:'center',justifyContent:'center',backgroundColor:C.white,minHeight:50,paddingTop:4}}>
+      <BannerAd
+        unitId={__DEV__?TestIds.BANNER:(process.env.EXPO_PUBLIC_ADMOB_BANNER_UNIT_ID||TestIds.BANNER)}
+        size={BannerAdSize.BANNER}
+        requestOptions={{requestNonPersonalizedAdsOnly:true}}
+        onAdFailedToLoad={error=>{setAdLoadFailed(true);console.warn('AdMob banner failed:',error?.message||error);}}
+        onAdLoaded={()=>setAdLoadFailed(false)}
+      />
+    </View>:null}
     <View style={{height:78,paddingBottom:Platform.OS==='android'?6:2,borderTopWidth:1,borderColor:C.line,flexDirection:'row',alignItems:'center',justifyContent:'space-around',backgroundColor:C.white,elevation:8}}>
       {([['Chats','▤'],['Updates','◉'],['Calls','⌕'],['You','●']] as string[][]).map(([t,icon])=><Btn key={t} onPress={()=>setTab(t)} style={{alignItems:'center',minWidth:64}}><Text style={{fontSize:19,color:tab===t?C.green:C.muted}}>{icon}</Text><Text style={{fontSize:10,fontWeight:tab===t?'900':'600',color:tab===t?C.green:C.muted,marginTop:3}}>{t}</Text></Btn>)}
     </View>
