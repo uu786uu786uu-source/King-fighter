@@ -1019,6 +1019,8 @@ export default function App() {
     const row=Array.isArray(data)?data[0]:data;
     if(!row?.conversation_id){Alert.alert('Contact not found','No Guftin account uses this username yet.');return;}
     setAddOpen(false);setContactUsername('');
+    await supabase.from('kc_conversation_members').update({hidden_at:null})
+      .eq('conversation_id',row.conversation_id).eq('user_id',session.user.id);
     const name=row.display_name||row.username||'Guftin member';
     const chat:Chat={id:row.conversation_id,name,avatar:initials(name),color:colorFor(name),last:'No messages yet',time:'',unread:0,online:false,kind:'direct',lastAt:Date.now()};
     setChats(prev=>[chat,...prev.filter(c=>c.id!==chat.id)]);
