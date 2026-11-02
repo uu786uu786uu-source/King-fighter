@@ -22,7 +22,7 @@ import { Track } from 'livekit-client';
 
 WebBrowser.maybeCompleteAuthSession();
 registerGlobals();
-Notifications.setNotificationHandler({handleNotification:async()=>({shouldShowAlert:true,shouldPlaySound:true,shouldSetBadge:true})});
+Notifications.setNotificationHandler({handleNotification:async()=>({shouldShowAlert:true,shouldPlaySound:true,shouldSetBadge:true,shouldShowBanner:true,shouldShowList:true})});
 
 let C:any = { ink:'#102b27', muted:'#82938e', green:'#087e6c', mint:'#e5f5ee', paper:'#f5f8f6', white:'#fff', line:'#e9efec', red:'#b94e48' };
 const THEMES:any = {
@@ -1110,6 +1110,21 @@ export default function App() {
     }));
     setStatuses(mapped);
   },[session]);
+
+  const toggleStatusLike=async(status:any)=>{
+    if(!session||status.user_id===session.user.id)return;
+    if(status.liked_by_me){
+      const {error}=await supabase.from('kc_status_likes').delete()
+        .eq('status_id',status.id).eq('user_id',session.user.id);
+      if(error){Alert.alert('Could not remove like',error.message);return;}
+    }else{
+      const {error}=await supabase.from('kc_status_likes').insert({
+        status_id:status.id,user_id:session.user.id
+      });
+      if(error&&error.code!=='23505'){Alert.alert('Could not like status',error.message);return;}
+    }
+    await loadStatuses();
+  };
 
   const visible=useMemo(()=>chats.filter(c=>c.name.toLowerCase().includes(search.toLowerCase())),[chats,search]);
   const pageTitle=tab==='Chats'?'Messages':tab==='Updates'?'Updates':tab==='Calls'?'Calls':'You';
