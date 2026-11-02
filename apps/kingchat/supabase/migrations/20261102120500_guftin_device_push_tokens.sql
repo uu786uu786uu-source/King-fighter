@@ -1,0 +1,1 @@
+create unique index if not exists kc_device_tokens_token_uq on public.kc_device_tokens(token);
