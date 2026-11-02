@@ -9,6 +9,7 @@ import { supabase } from './src/lib/supabase';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import * as ImagePicker from 'expo-image-picker';
+import * as MediaLibrary from 'expo-media-library/legacy';
 import { Audio } from 'expo-av';
 import { File, Paths } from 'expo-file-system';
 import { VideoView, useVideoPlayer } from 'expo-video';
@@ -20,7 +21,14 @@ import { Track } from 'livekit-client';
 WebBrowser.maybeCompleteAuthSession();
 registerGlobals();
 
-const C = { ink:'#102b27', muted:'#82938e', green:'#087e6c', mint:'#e5f5ee', paper:'#f5f8f6', white:'#fff', line:'#e9efec', red:'#b94e48' };
+let C:any = { ink:'#102b27', muted:'#82938e', green:'#087e6c', mint:'#e5f5ee', paper:'#f5f8f6', white:'#fff', line:'#e9efec', red:'#b94e48' };
+const THEMES:any = {
+  emerald:{ink:'#102b27',muted:'#82938e',green:'#087e6c',mint:'#e5f5ee',paper:'#f5f8f6',white:'#fff',line:'#e9efec',red:'#b94e48'},
+  ocean:{ink:'#112b46',muted:'#71869e',green:'#2476d2',mint:'#e5f0ff',paper:'#f4f8ff',white:'#fff',line:'#e0e9f5',red:'#c94f68'},
+  violet:{ink:'#2d2145',muted:'#8b7c9f',green:'#7950c8',mint:'#efe8ff',paper:'#f8f5ff',white:'#fff',line:'#ece4f7',red:'#c45073'},
+  sunset:{ink:'#472b2b',muted:'#987c73',green:'#d45b42',mint:'#ffede4',paper:'#fff7f2',white:'#fff',line:'#f3e4dc',red:'#b63f4b'},
+  night:{ink:'#edf3ff',muted:'#9baac0',green:'#77b9ff',mint:'#223d5d',paper:'#101a2b',white:'#1a2940',line:'#2a3b54',red:'#ff8894'}
+};
 type Chat = { id:string; name:string; avatar:string; avatarUrl?:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number };
 type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; attachment_url?:string|null; created_at:string; mine:boolean };
 const AUTH_REDIRECT_URL = 'kingchat://auth/callback';
@@ -34,8 +42,8 @@ const timeLabel = (value:string) => {
   const yesterday=new Date(now); yesterday.setDate(now.getDate()-1);
   return d.toDateString()===yesterday.toDateString()?'Yesterday':d.toLocaleDateString([], {day:'numeric',month:'short'});
 };
-function Btn({children,onPress,style,disabled}:any) {
-  return <TouchableOpacity disabled={disabled} onPress={onPress} activeOpacity={.75} style={[style,disabled?{opacity:.55}:null]}>{children}</TouchableOpacity>;
+function Btn({children,onPress,onLongPress,style,disabled}:any) {
+  return <TouchableOpacity disabled={disabled} onPress={onPress} onLongPress={onLongPress} delayLongPress={420} activeOpacity={.75} style={[style,disabled?{opacity:.55}:null]}>{children}</TouchableOpacity>;
 }
 function Avatar({label,color,size=52,online=false,uri}:any) {
   return <View style={{width:size,height:size,borderRadius:size*.34,backgroundColor:color,alignItems:'center',justifyContent:'center',overflow:'hidden'}}>
@@ -136,7 +144,12 @@ export default function App() {
   const [outgoingCall,setOutgoingCall]=useState<any>(null);
   const [liveCall,setLiveCall]=useState<any>(null);
   const [callBusy,setCallBusy]=useState(false);
+  const [callHistory,setCallHistory]=useState<any[]>([]);
+  const [themeName,setThemeName]=useState('emerald');
+  const [deliveredByMessage,setDeliveredByMessage]=useState<Record<string,string>>({});
+  const hiddenMessageIds=useRef(new Set<string>());
   const joiningCallIds=useRef(new Set<string>());
+  Object.assign(C,THEMES[themeName]||THEMES.emerald);
 
   const [authBusy,setAuthBusy]=useState(false);
   const [authMode,setAuthMode]=useState<'login'|'signup'>('signup');
@@ -168,6 +181,7 @@ export default function App() {
           if(typeof saved.autoSync==='boolean')setAutoSync(saved.autoSync);
           if([3,5,10].includes(saved.syncIntervalSeconds))setSyncIntervalSeconds(saved.syncIntervalSeconds);
           if(typeof saved.mediaAutoDownload==='boolean')setMediaAutoDownload(saved.mediaAutoDownload);
+          if(['emerald','ocean','violet','sunset','night'].includes(saved.themeName))setThemeName(saved.themeName);
         }catch{ /* Ignore an outdated or malformed local preferences record. */ }
       }
       setSettingsLoaded(true);
@@ -177,8 +191,8 @@ export default function App() {
 
   useEffect(()=>{
     if(!settingsLoaded)return;
-    void AsyncStorage.setItem('guftin-preferences',JSON.stringify({showReadReceipts,onlineVisibility,autoSync,syncIntervalSeconds,mediaAutoDownload}));
-  },[settingsLoaded,showReadReceipts,onlineVisibility,autoSync,syncIntervalSeconds,mediaAutoDownload]);
+    void AsyncStorage.setItem('guftin-preferences',JSON.stringify({showReadReceipts,onlineVisibility,autoSync,syncIntervalSeconds,mediaAutoDownload,themeName}));
+  },[settingsLoaded,showReadReceipts,onlineVisibility,autoSync,syncIntervalSeconds,mediaAutoDownload,themeName]);
 
   const completeAuthUrl=useCallback(async(url:string)=>{
     if(!url||handledAuthUrls.current.has(url)) return;
@@ -267,8 +281,8 @@ export default function App() {
     setLoading(true);
     try{
       const {data:memberships,error}=await supabase.from('kc_conversation_members')
-        .select('conversation_id,joined_at,last_read_at,conversation:kc_conversations!inner(id,kind,title,updated_at)')
-        .eq('user_id',session.user.id);
+        .select('conversation_id,joined_at,last_read_at,hidden_at,conversation:kc_conversations!inner(id,kind,title,updated_at)')
+        .eq('user_id',session.user.id).is('hidden_at',null);
       if(error) throw error;
       const rows=(memberships||[]) as any[];
       const ids=rows.map(r=>r.conversation_id).filter(Boolean);
@@ -355,8 +369,50 @@ export default function App() {
         body='🔒 Encrypted message — '+(e?.message||'unable to decrypt on this device.');
       }
     }
-    return {...raw,body,attachment_url,mine:raw.sender_id===session?.user?.id};
+    return {...raw,body,attachment_url,mine:raw.sender_id===session?.user?.id,deleted_at:raw.deleted_at||null};
   },[session,deviceIdentity]);
+
+  const saveMediaToGallery=async(item:any,showFeedback=true)=>{
+    if(!item?.attachment_url||!['image','video'].includes(item.message_type))return;
+    try{
+      const permission=await MediaLibrary.requestPermissionsAsync(true);
+      if(!permission.granted)throw new Error('Allow photo library permission to save this media.');
+      await MediaLibrary.saveToLibraryAsync(item.attachment_url);
+      if(showFeedback)Alert.alert('Saved to gallery','The photo/video was saved to your device gallery.');
+    }catch(e:any){
+      if(showFeedback)Alert.alert('Could not save media',e?.message||'Try again after allowing gallery permission.');
+    }
+  };
+
+  const hideChat=async(chat:Chat)=>{
+    if(!session)return;
+    const {error}=await supabase.from('kc_conversation_members')
+      .update({hidden_at:new Date().toISOString()})
+      .eq('conversation_id',chat.id).eq('user_id',session.user.id);
+    if(error){Alert.alert('Chat not deleted',error.message);return;}
+    setChats(prev=>prev.filter(item=>item.id!==chat.id));
+    if(active?.id===chat.id)setActive(null);
+  };
+
+  const deleteMessage=async(item:Message)=>{
+    if(!session)return;
+    const hideForMe=async()=>{
+      const {error}=await supabase.from('kc_message_hidden').insert({message_id:item.id,user_id:session.user.id});
+      if(error&&error.code!=='23505'){Alert.alert('Message not deleted',error.message);return;}
+      hiddenMessageIds.current.add(item.id);
+      setMessages(prev=>({...prev,[item.conversation_id]:(prev[item.conversation_id]||[]).filter(m=>m.id!==item.id)}));
+    };
+    const deleteForEveryone=async()=>{
+      const {error}=await supabase.from('kc_messages').update({deleted_at:new Date().toISOString()})
+        .eq('id',item.id).eq('sender_id',session.user.id);
+      if(error){Alert.alert('Message not deleted',error.message);return;}
+      setMessages(prev=>({...prev,[item.conversation_id]:(prev[item.conversation_id]||[]).map(m=>m.id===item.id?{...m,deleted_at:new Date().toISOString(),body:null,attachment_url:null}:m)}));
+    };
+    const options:any[]=[{text:'Delete for me',onPress:()=>void hideForMe()}];
+    if(item.mine&&!item.deleted_at)options.push({text:'Delete for everyone',style:'destructive',onPress:()=>void deleteForEveryone()});
+    options.push({text:'Cancel',style:'cancel'});
+    Alert.alert('Delete message','Choose where to delete this message.',options);
+  };
 
   const joinCall=useCallback(async(call:any)=>{
     if(!call?.id||joiningCallIds.current.has(call.id))return;
