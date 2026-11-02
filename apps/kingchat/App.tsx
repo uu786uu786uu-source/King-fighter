@@ -111,6 +111,7 @@ export default function App() {
   const [profileReady,setProfileReady]=useState(false);
   const [chats,setChats]=useState<Chat[]>([]);
   const [active,setActive]=useState<Chat|null>(null);
+  const [pendingNotificationConversation,setPendingNotificationConversation]=useState<string|null>(null);
   const [messages,setMessages]=useState<Record<string,Message[]>>({});
   const [peerLastReadAt,setPeerLastReadAt]=useState<string|null>(null);
   const activeConversationIdRef=useRef<string|null>(null);
@@ -292,20 +293,23 @@ export default function App() {
       const rows=(memberships||[]) as any[];
       const ids=rows.map(r=>r.conversation_id).filter(Boolean);
       if(ids.length===0){setChats([]);return;}
-      const [memberResult,profileResult,messageResult]=await Promise.all([
+      const [memberResult,profileResult,messageResult,hiddenResult]=await Promise.all([
         supabase.from('kc_conversation_members').select('conversation_id,user_id,last_read_at,joined_at').in('conversation_id',ids),
         supabase.from('kc_profiles').select('id,display_name,avatar_url,is_online').neq('id',session.user.id),
-        supabase.from('kc_messages').select('id,conversation_id,sender_id,body,message_type,created_at')
-          .in('conversation_id',ids).is('deleted_at',null).order('created_at',{ascending:false}).limit(500)
+        supabase.from('kc_messages').select('id,conversation_id,sender_id,body,message_type,created_at,deleted_at')
+          .in('conversation_id',ids).is('deleted_at',null).order('created_at',{ascending:false}).limit(500),
+        supabase.from('kc_message_hidden').select('message_id').eq('user_id',session.user.id)
       ]);
       if(memberResult.error) throw memberResult.error;
       if(messageResult.error) throw messageResult.error;
       const members=(memberResult.data||[]) as any[];
+      const hiddenIds=new Set((hiddenResult.data||[]).map((row:any)=>row.message_id));
+      const inboxMessages=((messageResult.data||[]) as any[]).filter(message=>!hiddenIds.has(message.id));
       const peerIds=[...new Set(members.filter(m=>m.user_id!==session.user.id).map(m=>m.user_id))];
       const profiles=(profileResult.error?[]:(profileResult.data||[])) as any[];
       const profileMap=new Map(profiles.filter(p=>peerIds.includes(p.id)).map(p=>[p.id,p]));
       const latest=new Map<string,any>();
-      for(const message of (messageResult.data||[]) as any[]) if(!latest.has(message.conversation_id)) latest.set(message.conversation_id,message);
+      for(const message of inboxMessages) if(!latest.has(message.conversation_id)) latest.set(message.conversation_id,message);
       const mapped:Chat[]=(await Promise.all(rows.map(async row=>{
         const conv=row.conversation||{};
         const peers=members.filter(m=>m.conversation_id===row.conversation_id&&m.user_id!==session.user.id);
@@ -317,14 +321,15 @@ export default function App() {
           row.last_read_at?new Date(row.last_read_at).getTime():0,
           row.joined_at?new Date(row.joined_at).getTime():0
         );
-        const unread=(messageResult.data||[]).filter((message:any)=>
+        const unread=inboxMessages.filter((message:any)=>
           message.conversation_id===row.conversation_id &&
           message.sender_id!==session.user.id &&
           new Date(message.created_at).getTime()>readThrough
         ).length;
         let preview='No messages yet';
         if(last){
-          if(last.message_type==='image')preview='Photo';
+          if(last.deleted_at)preview='This message was deleted';
+          else if(last.message_type==='image')preview='Photo';
           else if(last.message_type==='video')preview='Video';
           else if(last.message_type==='audio')preview='Voice message';
           else if(typeof last.body==='string'&&last.body.startsWith(E2EE_PREFIX)){
@@ -641,15 +646,13 @@ export default function App() {
       }else if(data?.type==='message'){
         setTab('Chats');
         if(typeof data.conversation_id==='string'){
-          void loadInbox().then(()=>{
-            const chat=chats.find(item=>item.id===data.conversation_id);
-            if(chat)void openChat(chat);
-          });
+          setPendingNotificationConversation(data.conversation_id);
+          void loadInbox();
         }
       }
     });
     return ()=>subscription.remove();
-  },[session,respondToCall,loadInbox,chats]);
+  },[session,respondToCall,loadInbox]);
 
   const loadMessages=useCallback(async(conversationId:string)=>{
     if(!session) return;
@@ -703,6 +706,15 @@ export default function App() {
     setActive(chat);
     await loadMessages(chat.id);
   };
+
+  useEffect(()=>{
+    if(!pendingNotificationConversation)return;
+    const chat=chats.find(item=>item.id===pendingNotificationConversation);
+    if(chat){
+      setPendingNotificationConversation(null);
+      void openChat(chat);
+    }
+  },[pendingNotificationConversation,chats]);
 
   const sendMessage=async()=>{
     const body=draft.trim();
