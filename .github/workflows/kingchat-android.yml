@@ -16,6 +16,9 @@ on:
 jobs:
   android-apk:
     runs-on: ubuntu-latest
+    env:
+      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${{ secrets.GUFTIN_GOOGLE_WEB_CLIENT_ID }}
+      EXPO_PUBLIC_GOOGLE_IOS_URL_SCHEME: ${{ vars.GUFTIN_GOOGLE_IOS_URL_SCHEME }}
     defaults:
       run:
         working-directory: apps/kingchat
@@ -26,6 +29,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Check Google OAuth build configuration
+        run: |
+          if [ -z "${EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID:-}" ]; then
+            echo "::warning::GUFTIN_GOOGLE_WEB_CLIENT_ID is not set. The APK will build, but Android Google sign-in will ask for this Web OAuth Client ID until configured."
+          elif [[ "$EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID" != *.apps.googleusercontent.com ]]; then
+            echo "::error::GUFTIN_GOOGLE_WEB_CLIENT_ID must be a Google OAuth Web Client ID ending in .apps.googleusercontent.com"
+            exit 1
+          fi
       - name: Install dependencies
         run: npm install
       - name: TypeScript check

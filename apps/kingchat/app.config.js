@@ -33,7 +33,7 @@ module.exports = ({ config }) => ({
   },
   name: "Guftin",
   slug: "guftin",
-  version: "1.4.3",
+  version: "1.4.4",
   orientation: "portrait",
   userInterfaceStyle: "light",
   // Keep the registered callback scheme so Google/email auth redirects keep working.
@@ -42,7 +42,7 @@ module.exports = ({ config }) => ({
   android: {
     ...config.android,
     package: "com.guftin.app",
-    versionCode: 8,
+    versionCode: 9,
     // Explicitly register the Supabase OAuth return URL on Android. The broad
     // scheme registration remains in place for other Guftin deep links.
     intentFilters: [
@@ -68,7 +68,7 @@ module.exports = ({ config }) => ({
   ios: {
     ...config.ios,
     bundleIdentifier: "com.guftin.app",
-    buildNumber: "8",
+    buildNumber: "9",
     icon: "./assets/guftin-icon.png",
     supportsTablet: true,
     infoPlist: {
@@ -81,6 +81,13 @@ module.exports = ({ config }) => ({
   },
   plugins: [
     ...(config.plugins || []),
+    [
+      "react-native-nitro-google-signin",
+      {
+        // Android uses native Credential Manager; iOS keeps its existing OAuth flow.
+        iosUrlScheme: process.env.EXPO_PUBLIC_GOOGLE_IOS_URL_SCHEME || "com.googleusercontent.apps.guftin-ios-not-configured"
+      }
+    ],
     [
       "expo-media-library",
       {

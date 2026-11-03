@@ -18,6 +18,7 @@ import mobileAds, { BannerAd, BannerAdSize, MaxAdContentRating, TestIds } from '
 import { File, Paths } from 'expo-file-system';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import * as ExpoCrypto from 'expo-crypto';
+import { GoogleOneTapSignIn, isCancelledResponse, isSuccessResponse } from 'react-native-nitro-google-signin';
 import { DeviceIdentity, E2EE_MEDIA_PREFIX, E2EE_PREFIX, decryptMediaForDevice, decryptMessageForDevice, encryptMediaForDevices, encryptMessageForDevices, loadOrCreateDeviceIdentity } from './src/lib/e2ee';
 import { AudioSession, LiveKitRoom, VideoTrack, isTrackReference, registerGlobals, useTracks } from '@livekit/react-native';
 import { Track } from 'livekit-client';
@@ -37,6 +38,7 @@ const THEMES:any = {
 type Chat = { id:string; name:string; avatar:string; avatarUrl?:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number };
 type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; attachment_url?:string|null; created_at:string; mine:boolean; deleted_at?:string|null };
 const AUTH_REDIRECT_URL = 'kingchat://auth/callback';
+const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '';
 const palette = ['#d49a91','#8796c7','#81ad98','#bd8aa8','#c4a47c','#9a91bd'];
 // Supabase chat-media is currently configured for 50 MB per object. Keep encrypted
 // uploads below that ceiling because authenticated encryption adds a small overhead.
@@ -1077,16 +1079,59 @@ function GuftinApp() {
   const googleSignIn=async()=>{
     setAuthBusy(true);setAuthError('');
     try{
-      const redirectTo=AUTH_REDIRECT_URL;
-      const {data,error}=await supabase.auth.signInWithOAuth({
-        provider:'google',options:{redirectTo,skipBrowserRedirect:true}
-      });
-      if(error) throw error;
-      if(!data?.url) throw new Error('Google sign-in link could not be created.');
-      const result=await WebBrowser.openAuthSessionAsync(data.url,redirectTo);
-      if(result.type==='success') await completeAuthUrl(result.url);
+      if(Platform.OS==='android'){
+        if(!GOOGLE_WEB_CLIENT_ID||!GOOGLE_WEB_CLIENT_ID.endsWith('.apps.googleusercontent.com')){
+          throw new Error('Google sign-in needs the Web application OAuth Client ID. Add it as GUFTIN_GOOGLE_WEB_CLIENT_ID in GitHub Actions secrets, then rebuild Guftin.');
+        }
+        // Bind this native Google ID token to the current sign-in attempt.
+        // Google receives the SHA-256 nonce; Supabase receives the original nonce.
+        const nonce=`${ExpoCrypto.randomUUID()}${ExpoCrypto.randomUUID()}`;
+        const hashedNonce=await ExpoCrypto.digestStringAsync(
+          ExpoCrypto.CryptoDigestAlgorithm.SHA256,
+          nonce,
+          {encoding:ExpoCrypto.CryptoEncoding.HEX}
+        );
+        GoogleOneTapSignIn.configure({
+          webClientId:GOOGLE_WEB_CLIENT_ID,
+          nonce:hashedNonce,
+          offlineAccess:false,
+          autoSelectOnSignIn:false
+        });
+        await GoogleOneTapSignIn.checkPlayServices();
+        // Android Credential Manager presents the native Google account picker;
+        // this branch does not launch Chrome or a Guftin website.
+        const response=await GoogleOneTapSignIn.presentExplicitSignIn();
+        if(isCancelledResponse(response))return;
+        if(!isSuccessResponse(response)||!response.data?.idToken){
+          throw new Error('Google did not return a valid sign-in token. Check the Android OAuth package name and SHA-1 fingerprint.');
+        }
+        const {error}=await supabase.auth.signInWithIdToken({
+          provider:'google',
+          token:response.data.idToken,
+          nonce
+        });
+        if(error)throw error;
+      }else{
+        // Keep the existing browser-based OAuth path for iOS. Android uses
+        // native Credential Manager above.
+        const redirectTo=AUTH_REDIRECT_URL;
+        const {data,error}=await supabase.auth.signInWithOAuth({
+          provider:'google',options:{redirectTo,skipBrowserRedirect:true}
+        });
+        if(error)throw error;
+        if(!data?.url)throw new Error('Google sign-in link could not be created.');
+        const result=await WebBrowser.openAuthSessionAsync(data.url,redirectTo);
+        if(result.type==='success')await completeAuthUrl(result.url);
+      }
     }catch(e:any){
-      setAuthError(e?.message||'Google sign-in did not complete. Check Google provider settings.');
+      const code=e?.code||'';
+      if(code==='DEVELOPER_ERROR'){
+        setAuthError('Google Android setup mismatch. Confirm package name com.guftin.app and add the APK signing SHA-1 to the Android OAuth client.');
+      }else if(code==='PLAY_SERVICES_NOT_AVAILABLE'){
+        setAuthError('Google Play Services is unavailable or needs updating on this device.');
+      }else{
+        setAuthError(e?.message||'Google sign-in did not complete. Check the Google OAuth settings.');
+      }
     }finally{setAuthBusy(false);}
   };
 
