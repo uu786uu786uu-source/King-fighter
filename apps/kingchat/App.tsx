@@ -18,7 +18,7 @@ import mobileAds, { BannerAd, BannerAdSize, MaxAdContentRating, TestIds } from '
 import { File, Paths } from 'expo-file-system';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import * as ExpoCrypto from 'expo-crypto';
-import { GoogleOneTapSignIn, isCancelledResponse, isSuccessResponse } from 'react-native-nitro-google-signin';
+import { GoogleOneTapSignIn, isCancelledResponse, isNoSavedCredentialFoundResponse, isSuccessResponse } from 'react-native-nitro-google-signin';
 import { DeviceIdentity, E2EE_MEDIA_PREFIX, E2EE_PREFIX, decryptMediaForDevice, decryptMessageForDevice, encryptMediaForDevices, encryptMessageForDevices, loadOrCreateDeviceIdentity } from './src/lib/e2ee';
 import { AudioSession, LiveKitRoom, VideoTrack, isTrackReference, registerGlobals, useTracks } from '@livekit/react-native';
 import { Track } from 'livekit-client';
@@ -1095,14 +1095,17 @@ function GuftinApp() {
         );
         GoogleOneTapSignIn.configure({
           webClientId:GOOGLE_WEB_CLIENT_ID,
-          nonce:hashedNonce,
           offlineAccess:false,
           autoSelectOnSignIn:false
         });
         await GoogleOneTapSignIn.checkPlayServices();
-        // Android Credential Manager presents the native Google account picker;
-        // this branch does not launch Chrome or a Guftin website.
-        const response=await GoogleOneTapSignIn.presentExplicitSignIn();
+        // Show the existing Google accounts on this Android device first.
+        // createAccount() opens Credential Manager's account chooser; only use
+        // the explicit add-account flow if Android reports no saved credentials.
+        let response=await GoogleOneTapSignIn.createAccount({nonce:hashedNonce});
+        if(isNoSavedCredentialFoundResponse(response)){
+          response=await GoogleOneTapSignIn.presentExplicitSignIn({nonce:hashedNonce});
+        }
         if(isCancelledResponse(response))return;
         if(!isSuccessResponse(response)||!response.data?.idToken){
           throw new Error('Google did not return a valid sign-in token. Check the Android OAuth package name and SHA-1 fingerprint.');
