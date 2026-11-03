@@ -38,7 +38,9 @@ const THEMES:any = {
 type Chat = { id:string; name:string; avatar:string; avatarUrl?:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number };
 type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; attachment_url?:string|null; created_at:string; mine:boolean; deleted_at?:string|null };
 const AUTH_REDIRECT_URL = 'kingchat://auth/callback';
-const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '';
+// Public OAuth Web client ID is intentionally available at build time as a fallback.
+// This prevents an unset GitHub Actions secret from disabling Android Google sign-in.
+const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '317953265600-oaddv5sf8ih1mqt0g2vq0ic15a9v7ft7.apps.googleusercontent.com';
 const palette = ['#d49a91','#8796c7','#81ad98','#bd8aa8','#c4a47c','#9a91bd'];
 // Supabase chat-media is currently configured for 50 MB per object. Keep encrypted
 // uploads below that ceiling because authenticated encryption adds a small overhead.
@@ -1081,7 +1083,7 @@ function GuftinApp() {
     try{
       if(Platform.OS==='android'){
         if(!GOOGLE_WEB_CLIENT_ID||!GOOGLE_WEB_CLIENT_ID.endsWith('.apps.googleusercontent.com')){
-          throw new Error('Google sign-in needs the Web application OAuth Client ID. Add it as GUFTIN_GOOGLE_WEB_CLIENT_ID in GitHub Actions secrets, then rebuild Guftin.');
+          throw new Error('Google sign-in configuration is missing from this Guftin build. Please install the latest APK.');
         }
         // Bind this native Google ID token to the current sign-in attempt.
         // Google receives the SHA-256 nonce; Supabase receives the original nonce.
