@@ -1102,9 +1102,9 @@ function GuftinApp() {
         // Show the existing Google accounts on this Android device first.
         // createAccount() opens Credential Manager's account chooser; only use
         // the explicit add-account flow if Android reports no saved credentials.
-        let response=await GoogleOneTapSignIn.createAccount({nonce:hashedNonce});
+        let response=await GoogleOneTapSignIn.createAccount();
         if(isNoSavedCredentialFoundResponse(response)){
-          response=await GoogleOneTapSignIn.presentExplicitSignIn({nonce:hashedNonce});
+          response=await GoogleOneTapSignIn.presentExplicitSignIn();
         }
         if(isCancelledResponse(response))return;
         if(!isSuccessResponse(response)||!response.data?.idToken){
