@@ -33,7 +33,7 @@ module.exports = ({ config }) => ({
   },
   name: "Guftin",
   slug: "guftin",
-  version: "1.4.5",
+  version: "1.4.6",
   orientation: "portrait",
   userInterfaceStyle: "light",
   // Keep the registered callback scheme so Google/email auth redirects keep working.
@@ -42,7 +42,7 @@ module.exports = ({ config }) => ({
   android: {
     ...config.android,
     package: "com.guftin.app",
-    versionCode: 10,
+    versionCode: 11,
     // Explicitly register the Supabase OAuth return URL on Android. The broad
     // scheme registration remains in place for other Guftin deep links.
     intentFilters: [
@@ -68,7 +68,7 @@ module.exports = ({ config }) => ({
   ios: {
     ...config.ios,
     bundleIdentifier: "com.guftin.app",
-    buildNumber: "10",
+    buildNumber: "11",
     icon: "./assets/guftin-icon.png",
     supportsTablet: true,
     infoPlist: {
