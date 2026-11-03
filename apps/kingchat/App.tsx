@@ -1095,6 +1095,7 @@ function GuftinApp() {
         );
         GoogleOneTapSignIn.configure({
           webClientId:GOOGLE_WEB_CLIENT_ID,
+          nonce:hashedNonce,
           offlineAccess:false,
           autoSelectOnSignIn:false
         });
