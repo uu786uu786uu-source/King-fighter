@@ -1100,12 +1100,12 @@ function GuftinApp() {
           autoSelectOnSignIn:false
         });
         await GoogleOneTapSignIn.checkPlayServices();
-        // Show the existing Google accounts on this Android device first.
-        // createAccount() opens Credential Manager's account chooser; only use
-        // the explicit add-account flow if Android reports no saved credentials.
-        let response=await GoogleOneTapSignIn.createAccount();
+        // Always use Google's interactive native account chooser so the user
+        // can choose an existing Google account on this Android device.
+        const response=await GoogleOneTapSignIn.createAccount();
         if(isNoSavedCredentialFoundResponse(response)){
-          response=await GoogleOneTapSignIn.presentExplicitSignIn();
+          setAuthError('Android did not offer any saved Google accounts to Guftin. Turn on "Sign-in prompts" in your Google Account settings, then try again. No new account was created.');
+          return;
         }
         if(isCancelledResponse(response))return;
         if(!isSuccessResponse(response)||!response.data?.idToken){
@@ -1410,6 +1410,7 @@ function GuftinApp() {
         <Btn disabled={authBusy} onPress={googleSignIn} style={{backgroundColor:C.white,borderWidth:1,borderColor:C.line,padding:16,borderRadius:16,alignItems:'center',flexDirection:'row',justifyContent:'center',gap:10}}>
           <Text style={{fontWeight:'900',fontSize:18,color:'#4285F4'}}>G</Text><Text style={{color:C.ink,fontWeight:'800'}}>Continue with Google</Text>
         </Btn>
+        <Text style={{color:C.muted,fontSize:10,lineHeight:15,textAlign:'center',marginTop:8}}>Choose a Google account already on this phone. If the account list does not appear, enable Sign-in prompts in your Google Account settings.</Text>
         <Btn onPress={()=>{setAuthMode(authMode==='signup'?'login':'signup');setAuthError('');}} style={{padding:16,alignItems:'center'}}>
           <Text style={{color:C.green,fontWeight:'800'}}>{authMode==='signup'?'Already have an account? Sign in':'New to Guftin? Create account'}</Text>
         </Btn>
