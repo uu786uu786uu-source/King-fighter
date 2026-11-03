@@ -17,7 +17,7 @@ jobs:
   android-apk:
     runs-on: ubuntu-latest
     env:
-      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${{ secrets.GUFTIN_GOOGLE_WEB_CLIENT_ID }}
+      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${{ secrets.GUFTIN_GOOGLE_WEB_CLIENT_ID || '317953265600-oaddv5sf8ih1mqt0g2vq0ic15a9v7ft7.apps.googleusercontent.com' }}
       EXPO_PUBLIC_GOOGLE_IOS_URL_SCHEME: ${{ vars.GUFTIN_GOOGLE_IOS_URL_SCHEME }}
     defaults:
       run:
