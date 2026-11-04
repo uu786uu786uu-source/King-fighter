@@ -1100,14 +1100,19 @@ function GuftinApp() {
           autoSelectOnSignIn:false
         });
         await GoogleOneTapSignIn.checkPlayServices();
-        // Always use Google's interactive native account chooser so the user
-        // can choose an existing Google account on this Android device.
-        const response=await GoogleOneTapSignIn.createAccount();
+        // Always open Google's interactive account chooser first so the user
+        // can select any Google account already added to this Android device.
+        let response=await GoogleOneTapSignIn.createAccount();
+        // Credential Manager can return noSavedCredentialFound when the normal
+        // chooser is suppressed or unavailable. Fall back to Google's explicit
+        // Sign in with Google dialog instead of sending the user back to email signup.
         if(isNoSavedCredentialFoundResponse(response)){
-          setAuthError('Android did not offer any saved Google accounts to Guftin. Turn on "Sign-in prompts" in your Google Account settings, then try again. No new account was created.');
-          return;
+          response=await GoogleOneTapSignIn.presentExplicitSignIn();
         }
         if(isCancelledResponse(response))return;
+        if(isNoSavedCredentialFoundResponse(response)){
+          throw new Error('Google did not return an account. Make sure a Google account is added to this phone and try again.');
+        }
         if(!isSuccessResponse(response)||!response.data?.idToken){
           throw new Error('Google did not return a valid sign-in token. Check the Android OAuth package name and SHA-1 fingerprint.');
         }
