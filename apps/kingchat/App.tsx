@@ -18,7 +18,6 @@ import mobileAds, { BannerAd, BannerAdSize, MaxAdContentRating, TestIds } from '
 import { File, Paths } from 'expo-file-system';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import * as ExpoCrypto from 'expo-crypto';
-import { GoogleOneTapSignIn, isCancelledResponse, isNoSavedCredentialFoundResponse, isSuccessResponse } from 'react-native-nitro-google-signin';
 import { DeviceIdentity, E2EE_MEDIA_PREFIX, E2EE_PREFIX, decryptMediaForDevice, decryptMessageForDevice, encryptMediaForDevices, encryptMessageForDevices, loadOrCreateDeviceIdentity } from './src/lib/e2ee';
 import { AudioSession, LiveKitRoom, VideoTrack, isTrackReference, registerGlobals, useTracks } from '@livekit/react-native';
 import { Track } from 'livekit-client';
@@ -38,9 +37,6 @@ const THEMES:any = {
 type Chat = { id:string; name:string; avatar:string; avatarUrl?:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number };
 type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; attachment_url?:string|null; created_at:string; mine:boolean; deleted_at?:string|null };
 const AUTH_REDIRECT_URL = 'kingchat://auth/callback';
-// Public OAuth Web client ID is intentionally available at build time as a fallback.
-// This prevents an unset GitHub Actions secret from disabling Android Google sign-in.
-const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '317953265600-oaddv5sf8ih1mqt0g2vq0ic15a9v7ft7.apps.googleusercontent.com';
 const palette = ['#d49a91','#8796c7','#81ad98','#bd8aa8','#c4a47c','#9a91bd'];
 // Supabase chat-media is currently configured for 50 MB per object. Keep encrypted
 // uploads below that ceiling because authenticated encryption adds a small overhead.
@@ -1078,74 +1074,6 @@ function GuftinApp() {
     if(error)setAuthError(error.message);
   };
 
-  const googleSignIn=async()=>{
-    setAuthBusy(true);setAuthError('');
-    try{
-      if(Platform.OS==='android'){
-        if(!GOOGLE_WEB_CLIENT_ID||!GOOGLE_WEB_CLIENT_ID.endsWith('.apps.googleusercontent.com')){
-          throw new Error('Google sign-in configuration is missing from this Guftin build. Please install the latest APK.');
-        }
-        // Bind this native Google ID token to the current sign-in attempt.
-        // Google receives the SHA-256 nonce; Supabase receives the original nonce.
-        const nonce=`${ExpoCrypto.randomUUID()}${ExpoCrypto.randomUUID()}`;
-        const hashedNonce=await ExpoCrypto.digestStringAsync(
-          ExpoCrypto.CryptoDigestAlgorithm.SHA256,
-          nonce,
-          {encoding:ExpoCrypto.CryptoEncoding.HEX}
-        );
-        GoogleOneTapSignIn.configure({
-          webClientId:GOOGLE_WEB_CLIENT_ID,
-          nonce:hashedNonce,
-          offlineAccess:false,
-          autoSelectOnSignIn:false
-        });
-        await GoogleOneTapSignIn.checkPlayServices();
-        // Always open Google's interactive account chooser first so the user
-        // can select any Google account already added to this Android device.
-        let response=await GoogleOneTapSignIn.createAccount();
-        // Credential Manager can return noSavedCredentialFound when the normal
-        // chooser is suppressed or unavailable. Fall back to Google's explicit
-        // Sign in with Google dialog instead of sending the user back to email signup.
-        if(isNoSavedCredentialFoundResponse(response)){
-          response=await GoogleOneTapSignIn.presentExplicitSignIn();
-        }
-        if(isCancelledResponse(response))return;
-        if(isNoSavedCredentialFoundResponse(response)){
-          throw new Error('Google did not return an account. Make sure a Google account is added to this phone and try again.');
-        }
-        if(!isSuccessResponse(response)||!response.data?.idToken){
-          throw new Error('Google did not return a valid sign-in token. Check the Android OAuth package name and SHA-1 fingerprint.');
-        }
-        const {error}=await supabase.auth.signInWithIdToken({
-          provider:'google',
-          token:response.data.idToken,
-          nonce
-        });
-        if(error)throw error;
-      }else{
-        // Keep the existing browser-based OAuth path for iOS. Android uses
-        // native Credential Manager above.
-        const redirectTo=AUTH_REDIRECT_URL;
-        const {data,error}=await supabase.auth.signInWithOAuth({
-          provider:'google',options:{redirectTo,skipBrowserRedirect:true}
-        });
-        if(error)throw error;
-        if(!data?.url)throw new Error('Google sign-in link could not be created.');
-        const result=await WebBrowser.openAuthSessionAsync(data.url,redirectTo);
-        if(result.type==='success')await completeAuthUrl(result.url);
-      }
-    }catch(e:any){
-      const code=e?.code||'';
-      if(code==='DEVELOPER_ERROR'){
-        setAuthError('Google Android setup mismatch. Confirm package name com.guftin.app and add the APK signing SHA-1 to the Android OAuth client.');
-      }else if(code==='PLAY_SERVICES_NOT_AVAILABLE'){
-        setAuthError('Google Play Services is unavailable or needs updating on this device.');
-      }else{
-        setAuthError(e?.message||'Google sign-in did not complete. Check the Google OAuth settings.');
-      }
-    }finally{setAuthBusy(false);}
-  };
-
   const finishProfile=async()=>{
     if(!session||savingProfile)return;
     const cleanUsername=profileUsername.trim().toLowerCase().replace(/^@/,'');
@@ -1409,13 +1337,6 @@ function GuftinApp() {
         <Btn disabled={authBusy} onPress={authMode==='signup'?signUpEmail:signInEmail} style={{backgroundColor:C.green,padding:17,borderRadius:16,alignItems:'center'}}>
           {authBusy?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'900'}}>{authMode==='signup'?'Create account':'Sign in with email'}</Text>}
         </Btn>
-        <View style={{flexDirection:'row',alignItems:'center',gap:10,marginVertical:17}}>
-          <View style={{height:1,backgroundColor:C.line,flex:1}}/><Text style={{color:C.muted,fontSize:12}}>OR</Text><View style={{height:1,backgroundColor:C.line,flex:1}}/>
-        </View>
-        <Btn disabled={authBusy} onPress={googleSignIn} style={{backgroundColor:C.white,borderWidth:1,borderColor:C.line,padding:16,borderRadius:16,alignItems:'center',flexDirection:'row',justifyContent:'center',gap:10}}>
-          <Text style={{fontWeight:'900',fontSize:18,color:'#4285F4'}}>G</Text><Text style={{color:C.ink,fontWeight:'800'}}>Continue with Google</Text>
-        </Btn>
-        <Text style={{color:C.muted,fontSize:10,lineHeight:15,textAlign:'center',marginTop:8}}>Choose a Google account already on this phone. If the account list does not appear, enable Sign-in prompts in your Google Account settings.</Text>
         <Btn onPress={()=>{setAuthMode(authMode==='signup'?'login':'signup');setAuthError('');}} style={{padding:16,alignItems:'center'}}>
           <Text style={{color:C.green,fontWeight:'800'}}>{authMode==='signup'?'Already have an account? Sign in':'New to Guftin? Create account'}</Text>
         </Btn>
