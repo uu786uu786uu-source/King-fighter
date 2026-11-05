@@ -1002,8 +1002,16 @@ function GuftinApp() {
       const bytes=new Uint8Array(await file.arrayBuffer()),objectPath=session.user.id+'/profile/'+Date.now()+'_'+ExpoCrypto.randomUUID()+'.jpg';
       const {error}=await supabase.storage.from('chat-media').upload(objectPath,bytes,{contentType:'image/jpeg',upsert:false});bytes.fill(0);
       if(error)throw error;
+      const {data:savedProfile,error:profileError}=await supabase.from('kc_profiles')
+        .update({avatar_url:objectPath})
+        .eq('id',session.user.id)
+        .select('id').maybeSingle();
+      if(profileError)throw profileError;
+      if(!savedProfile)throw new Error('Your profile could not be found. Please reopen your profile and try again.');
       const signedUrl=await getSignedMediaUrl(objectPath);
-      setProfileAvatarPath(objectPath);setProfileAvatarUrl(signedUrl||asset.uri);
+      setProfileAvatarPath(objectPath);
+      setProfileAvatarUrl(signedUrl||asset.uri);
+      setProfile((current:any)=>current?{...current,avatar_url:objectPath}:current);
     }catch(e:any){Alert.alert('Photo not saved',e?.message||'Please try again.');}
     finally{setProfileUploading(false);}
   };
@@ -1116,7 +1124,7 @@ function GuftinApp() {
     setSavingProfile(true);
     const {error}=await supabase.rpc('kc_finish_profile',{p_username:cleanUsername,p_display_name:cleanName});
     if(error){setSavingProfile(false);Alert.alert('Profile not saved',error.message);return;}
-    const {error:aboutError}=await supabase.from('kc_profiles').update({about:about.trim().slice(0,160),avatar_url:profileAvatarPath||null}).eq('id',session.user.id);
+    const {error:aboutError}=await supabase.from('kc_profiles').update({about:about.trim().slice(0,160)}).eq('id',session.user.id);
     setSavingProfile(false);
     if(aboutError){Alert.alert('About text not saved',aboutError.message);return;}
     await loadProfile();
@@ -1188,7 +1196,7 @@ function GuftinApp() {
       if(membersError)throw membersError;
       const ids=[...new Set((members||[]).map((member:any)=>member.user_id))] as string[];
       const {data:people,error:peopleError}=await supabase.from('kc_profiles')
-        .select('id,display_name,username,about,avatar_url,is_online,last_seen_at').in('id',ids);
+        .select('id,display_name,username,about,avatar_url,is_online,last_seen_at,created_at').in('id',ids);
       if(peopleError)throw peopleError;
       const peopleMap=new Map((people||[]).map((person:any)=>[person.id,person]));
       const details=await Promise.all((members||[]).map(async(member:any)=>{
@@ -1409,35 +1417,59 @@ function GuftinApp() {
           </Btn>
         </View>
       </KeyboardAvoidingView>
-    <Modal visible={chatDetailsOpen} transparent animationType="slide" onRequestClose={()=>setChatDetailsOpen(false)}>
-      <View style={{flex:1,backgroundColor:'#0008',justifyContent:'flex-end'}}>
-        <View style={{backgroundColor:C.white,borderTopLeftRadius:24,borderTopRightRadius:24,padding:22,maxHeight:'86%'}}>
-          {chatDetailsLoading?<ActivityIndicator color={C.green} style={{padding:30}}/>:chatDetails?<ScrollView>
-            <View style={{alignItems:'center',paddingBottom:18}}>
-              <Avatar label={initials(chatDetails.conversation.kind==='group'?chatDetails.conversation.title:(chatDetails.members.find((member:any)=>member.user_id!==session.user.id)?.display_name||active.name||'G'))}
-                color={C.green} size={92} uri={chatDetails.conversation.kind==='group'?undefined:(chatDetails.members.find((member:any)=>member.user_id!==session.user.id)?.avatar_signed_url||undefined)}/>
-              <Text style={{fontSize:21,fontWeight:'900',color:C.ink,marginTop:12}}>{chatDetails.conversation.kind==='group'?chatDetails.conversation.title:(chatDetails.members.find((member:any)=>member.user_id!==session.user.id)?.display_name||active.name)}</Text>
-              <Text style={{fontSize:12,color:C.muted,marginTop:5}}>{chatDetails.conversation.kind==='group'?'Group conversation':'Guftin contact'}</Text>
-            </View>
-            {chatDetails.conversation.kind==='group'?<>
+    <Modal visible={chatDetailsOpen} animationType="slide" onRequestClose={()=>setChatDetailsOpen(false)}>
+      <SafeAreaView style={{flex:1,backgroundColor:C.paper}}>
+        <StatusBar barStyle="dark-content"/>
+        <View style={{height:58,backgroundColor:C.white,flexDirection:'row',alignItems:'center',paddingHorizontal:14,borderBottomWidth:1,borderColor:C.line}}>
+          <Btn onPress={()=>setChatDetailsOpen(false)} style={{padding:10}}><Text style={{fontSize:25,color:C.ink}}>‹</Text></Btn>
+          <Text style={{fontSize:18,fontWeight:'900',color:C.ink,marginLeft:8}}>Contact info</Text>
+        </View>
+        {chatDetailsLoading?<View style={{flex:1,alignItems:'center',justifyContent:'center'}}><ActivityIndicator color={C.green}/><Text style={{color:C.muted,marginTop:10}}>Loading contact information…</Text></View>:chatDetails?<ScrollView contentContainerStyle={{padding:18,paddingBottom:34}}>
+          <View style={{alignItems:'center',backgroundColor:C.white,borderRadius:22,padding:24,marginBottom:16}}>
+            <Avatar label={initials(chatDetails.conversation.kind==='group'?chatDetails.conversation.title:(chatDetails.members.find((member:any)=>member.user_id!==session.user.id)?.display_name||active.name||'G'))}
+              color={C.green} size={112} uri={chatDetails.conversation.kind==='group'?undefined:(chatDetails.members.find((member:any)=>member.user_id!==session.user.id)?.avatar_signed_url||undefined)}/>
+            <Text style={{fontSize:22,fontWeight:'900',color:C.ink,marginTop:15}}>{chatDetails.conversation.kind==='group'?chatDetails.conversation.title:(chatDetails.members.find((member:any)=>member.user_id!==session.user.id)?.display_name||active.name)}</Text>
+            {chatDetails.conversation.kind==='group'?<Text style={{fontSize:12,color:C.muted,marginTop:5}}>Group conversation · {chatDetails.members.length} participants</Text>:(()=>{
+              const person=chatDetails.members.find((member:any)=>member.user_id!==session.user.id)||{};
+              return <><Text style={{fontSize:13,color:C.green,fontWeight:'800',marginTop:5}}>@{person.username||'—'}</Text><Text style={{fontSize:12,color:C.muted,marginTop:5}}>{person.is_online?'● Online now':person.last_seen_at?'Last seen '+timeLabel(person.last_seen_at):'Offline'}</Text></>;
+            })()}
+          </View>
+          {chatDetails.conversation.kind==='group'?<>
+            <View style={{backgroundColor:C.white,borderRadius:18,padding:16}}>
               <Text style={{fontSize:14,fontWeight:'900',color:C.ink,marginBottom:8}}>Participants · {chatDetails.members.length}</Text>
-              {chatDetails.members.map((member:any)=><View key={member.user_id} style={{flexDirection:'row',alignItems:'center',gap:11,paddingVertical:10,borderBottomWidth:1,borderColor:C.line}}>
-                <Avatar label={initials(member.display_name||member.username||'G')} color={colorFor(member.user_id)} size={42} uri={member.avatar_signed_url}/>
-                <View style={{flex:1}}><Text style={{fontWeight:'800',color:C.ink}}>{member.display_name||'Guftin member'}{member.is_me?' (You)':''}</Text><Text style={{fontSize:11,color:C.muted}}>@{member.username||'member'}</Text></View>
+              {chatDetails.members.map((member:any)=><View key={member.user_id} style={{flexDirection:'row',alignItems:'center',gap:11,paddingVertical:11,borderBottomWidth:1,borderColor:C.line}}>
+                <Avatar label={initials(member.display_name||member.username||'G')} color={colorFor(member.user_id)} size={44} uri={member.avatar_signed_url}/>
+                <View style={{flex:1}}><Text style={{fontWeight:'800',color:C.ink}}>{member.display_name||'Guftin member'}{member.is_me?' (You)':''}</Text><Text style={{fontSize:11,color:C.muted,marginTop:3}}>@{member.username||'member'}</Text></View>
                 <Text style={{fontSize:10,color:C.green,fontWeight:'800'}}>{member.role||'member'}</Text>
               </View>)}
-            </>:(()=>{
-              const person=chatDetails.members.find((member:any)=>member.user_id!==session.user.id)||{};
-              return <View style={{gap:12}}>
-                <View style={{padding:14,backgroundColor:C.paper,borderRadius:14}}><Text style={{fontSize:10,color:C.muted}}>USERNAME</Text><Text style={{fontSize:15,fontWeight:'900',color:C.ink,marginTop:4}}>@{person.username||'—'}</Text></View>
-                <View style={{padding:14,backgroundColor:C.paper,borderRadius:14}}><Text style={{fontSize:10,color:C.muted}}>ABOUT</Text><Text style={{fontSize:14,color:C.ink,marginTop:4}}>{person.about||'No about information added.'}</Text></View>
-                <View style={{padding:14,backgroundColor:C.paper,borderRadius:14}}><Text style={{fontSize:10,color:C.muted}}>STATUS</Text><Text style={{fontSize:14,color:C.ink,marginTop:4}}>{person.is_online?'Online now':person.last_seen_at?'Last seen '+timeLabel(person.last_seen_at):'Offline'}</Text></View>
-              </View>;
-            })()}
-          </ScrollView>:<Text style={{color:C.muted}}>No details available.</Text>}
-          <Btn onPress={()=>setChatDetailsOpen(false)} style={{backgroundColor:C.green,padding:14,borderRadius:14,alignItems:'center',marginTop:16}}><Text style={{color:'#fff',fontWeight:'900'}}>Close</Text></Btn>
-        </View>
-      </View>
+            </View>
+          </>:(()=>{
+            const person=chatDetails.members.find((member:any)=>member.user_id!==session.user.id)||{};
+            return <View style={{gap:12}}>
+              <View style={{backgroundColor:C.white,borderRadius:16,padding:16}}>
+                <Text style={{fontSize:10,color:C.muted,fontWeight:'900',letterSpacing:1}}>NAME</Text>
+                <Text style={{fontSize:15,color:C.ink,fontWeight:'800',marginTop:5}}>{person.display_name||'Guftin member'}</Text>
+              </View>
+              <View style={{backgroundColor:C.white,borderRadius:16,padding:16}}>
+                <Text style={{fontSize:10,color:C.muted,fontWeight:'900',letterSpacing:1}}>USERNAME / GUFTIN ID</Text>
+                <Text style={{fontSize:15,color:C.ink,fontWeight:'900',marginTop:5}}>@{person.username||'—'}</Text>
+              </View>
+              <View style={{backgroundColor:C.white,borderRadius:16,padding:16}}>
+                <Text style={{fontSize:10,color:C.muted,fontWeight:'900',letterSpacing:1}}>ABOUT</Text>
+                <Text style={{fontSize:14,color:C.ink,lineHeight:21,marginTop:5}}>{person.about||'No about information added.'}</Text>
+              </View>
+              <View style={{backgroundColor:C.white,borderRadius:16,padding:16}}>
+                <Text style={{fontSize:10,color:C.muted,fontWeight:'900',letterSpacing:1}}>ACTIVITY</Text>
+                <Text style={{fontSize:14,color:C.ink,marginTop:5}}>{person.is_online?'Online now':person.last_seen_at?'Last seen '+timeLabel(person.last_seen_at):'Offline'}</Text>
+              </View>
+              <View style={{backgroundColor:C.white,borderRadius:16,padding:16}}>
+                <Text style={{fontSize:10,color:C.muted,fontWeight:'900',letterSpacing:1}}>MEMBER SINCE</Text>
+                <Text style={{fontSize:14,color:C.ink,marginTop:5}}>{person.created_at?new Date(person.created_at).toLocaleDateString([],{month:'long',year:'numeric'}):'Not available'}</Text>
+              </View>
+            </View>;
+          })()}
+        </ScrollView>:<View style={{flex:1,alignItems:'center',justifyContent:'center',padding:30}}><Text style={{color:C.muted}}>No contact information available.</Text></View>}
+      </SafeAreaView>
     </Modal>
 
     </SafeAreaView>;
@@ -1528,8 +1560,11 @@ function GuftinApp() {
       </View>
       <Text style={{fontWeight:'800',color:C.ink,marginTop:25,marginBottom:8}}>Display name</Text>
       <TextInput value={profileName} onChangeText={setProfileName} placeholder="Your name" maxLength={40} style={{backgroundColor:C.paper,borderRadius:14,padding:15,color:C.ink}}/>
-      <Text style={{fontWeight:'800',color:C.ink,marginTop:15,marginBottom:8}}>Username</Text>
-      <TextInput value={profileUsername} onChangeText={v=>setProfileUsername(v.toLowerCase().replace(/[^a-z0-9_]/g,''))} placeholder="Your unique username" autoCapitalize="none" maxLength={24} style={{backgroundColor:C.paper,borderRadius:14,padding:15,color:C.ink}}/>
+      <Text style={{fontWeight:'800',color:C.ink,marginTop:15,marginBottom:8}}>Username · permanent</Text>
+      {profile?.username?<View style={{backgroundColor:C.paper,borderRadius:14,padding:15,borderWidth:1,borderColor:C.line}}>
+        <Text style={{color:C.ink,fontWeight:'900'}}>@{profile.username}</Text>
+        <Text style={{color:C.muted,fontSize:11,marginTop:5}}>Your Guftin ID is locked and cannot be changed.</Text>
+      </View>:<TextInput value={profileUsername} onChangeText={v=>setProfileUsername(v.toLowerCase().replace(/[^a-z0-9_]/g,''))} placeholder="Your unique username" autoCapitalize="none" maxLength={24} style={{backgroundColor:C.paper,borderRadius:14,padding:15,color:C.ink}}/>}
       <Text style={{fontWeight:'800',color:C.ink,marginTop:15,marginBottom:8}}>About</Text>
       <TextInput value={about} onChangeText={setAbout} placeholder="A little about you" maxLength={160} multiline style={{backgroundColor:C.paper,borderRadius:14,padding:15,color:C.ink,minHeight:75,textAlignVertical:'top'}}/>
       <Btn disabled={savingProfile||profileUploading} onPress={saveProfile} style={{backgroundColor:C.green,padding:15,borderRadius:14,alignItems:'center',marginTop:10}}>{savingProfile?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'800'}}>Save profile</Text>}</Btn>
