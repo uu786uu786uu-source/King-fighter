@@ -1002,12 +1002,8 @@ function GuftinApp() {
       const bytes=new Uint8Array(await file.arrayBuffer()),objectPath=session.user.id+'/profile/'+Date.now()+'_'+ExpoCrypto.randomUUID()+'.jpg';
       const {error}=await supabase.storage.from('chat-media').upload(objectPath,bytes,{contentType:'image/jpeg',upsert:false});bytes.fill(0);
       if(error)throw error;
-      const {data:savedProfile,error:profileError}=await supabase.from('kc_profiles')
-        .update({avatar_url:objectPath})
-        .eq('id',session.user.id)
-        .select('id').maybeSingle();
+      const {error:profileError}=await supabase.rpc('kc_save_profile_avatar',{p_avatar_path:objectPath});
       if(profileError)throw profileError;
-      if(!savedProfile)throw new Error('Your profile could not be found. Please reopen your profile and try again.');
       const signedUrl=await getSignedMediaUrl(objectPath);
       setProfileAvatarPath(objectPath);
       setProfileAvatarUrl(signedUrl||asset.uri);
