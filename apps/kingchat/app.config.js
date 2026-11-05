@@ -36,7 +36,7 @@ module.exports = ({ config }) => ({
   version: "1.4.6",
   orientation: "portrait",
   userInterfaceStyle: "light",
-  // Keep the registered callback scheme so Google/email auth redirects keep working.
+  // Keep the app deep-link scheme for Guftin links and email auth callbacks.
   scheme: "kingchat",
   icon: "./assets/guftin-icon.png",
   android: {
@@ -81,13 +81,6 @@ module.exports = ({ config }) => ({
   },
   plugins: [
     ...(config.plugins || []),
-    [
-      "react-native-nitro-google-signin",
-      {
-        // Android uses native Credential Manager; iOS keeps its existing OAuth flow.
-        iosUrlScheme: process.env.EXPO_PUBLIC_GOOGLE_IOS_URL_SCHEME || "com.googleusercontent.apps.guftin-ios-not-configured"
-      }
-    ],
     [
       "expo-media-library",
       {
