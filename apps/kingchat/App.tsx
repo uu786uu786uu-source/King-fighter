@@ -41,6 +41,38 @@ const palette = ['#d49a91','#8796c7','#81ad98','#bd8aa8','#c4a47c','#9a91bd'];
 // Supabase chat-media is currently configured for 50 MB per object. Keep encrypted
 // uploads below that ceiling because authenticated encryption adds a small overhead.
 const MAX_MEDIA_BYTES = 45 * 1024 * 1024;
+const getExpoProjectId=()=>(
+  (Constants as any).easConfig?.projectId||
+  (Constants.expoConfig as any)?.extra?.eas?.projectId||
+  process.env.EXPO_PUBLIC_EAS_PROJECT_ID
+);
+const configureGuftinNotificationChannels=async()=>{
+  if(Platform.OS==='android'){
+    await Notifications.setNotificationChannelAsync('messages',{
+      name:'Messages',
+      importance:Notifications.AndroidImportance.HIGH,
+      vibrationPattern:[0,250,250,250],
+      sound:'default',
+      enableVibrate:true,
+      showBadge:true
+    });
+    await Notifications.setNotificationChannelAsync('calls',{
+      name:'Incoming calls',
+      description:'Guftin voice and video call alerts',
+      importance:Notifications.AndroidImportance.MAX,
+      vibrationPattern:[0,500,250,500,250,700],
+      sound:'default',
+      enableVibrate:true,
+      enableLights:true,
+      lightColor:'#087e6c',
+      showBadge:true
+    });
+  }
+  await Notifications.setNotificationCategoryAsync('guftin_incoming_call',[
+    {identifier:'accept_call',buttonTitle:'Accept',options:{opensAppToForeground:true}},
+    {identifier:'decline_call',buttonTitle:'Decline',options:{opensAppToForeground:true,isDestructive:true}}
+  ]);
+};
 const initials = (s:string) => s.trim().split(/\s+/).slice(0,2).map(x=>x[0]||'').join('').toUpperCase() || 'KC';
 const colorFor = (s:string) => { let n=0; for(let i=0;i<s.length;i++) n=(n*31+s.charCodeAt(i))>>>0; return palette[n%palette.length]; };
 const timeLabel = (value:string) => {
@@ -455,25 +487,38 @@ function GuftinApp() {
     return {...raw,body,attachment_url,mine:raw.sender_id===session?.user?.id,deleted_at:raw.deleted_at||null};
   },[session,deviceIdentity,getSignedMediaUrl]);
 
+  useEffect(()=>{
+    let mounted=true;
+    const registerPreviouslyAllowedDevice=async()=>{
+      setPushEnabled(false);
+      if(!session)return;
+      const permission=await Notifications.getPermissionsAsync();
+      if(!permission.granted)return;
+      const projectId=getExpoProjectId();
+      if(!projectId)return;
+      await configureGuftinNotificationChannels();
+      const token=(await Notifications.getExpoPushTokenAsync({projectId})).data;
+      const {error}=await supabase.from('kc_device_tokens').upsert({
+        user_id:session.user.id,token,platform:Platform.OS
+      },{onConflict:'token'});
+      if(mounted)setPushEnabled(!error);
+      if(error)console.warn('Push token registration:',error.message);
+    };
+    void registerPreviouslyAllowedDevice().catch(error=>console.warn('Push registration check:',error?.message||error));
+    return ()=>{mounted=false;};
+  },[session?.user?.id]);
+
   const enablePushNotifications=async()=>{
     if(!session||pushBusy)return;
     setPushBusy(true);
     try{
-      if(Platform.OS==='android'){
-        await Notifications.setNotificationChannelAsync('messages',{
-          name:'Messages and calls',
-          importance:Notifications.AndroidImportance.MAX,
-          vibrationPattern:[0,250,250,250],
-          sound:'default'
-        });
-      }
+      await configureGuftinNotificationChannels();
       let permission=await Notifications.getPermissionsAsync();
       if(!permission.granted)permission=await Notifications.requestPermissionsAsync();
       if(!permission.granted)throw new Error('Notification permission was not granted.');
-      const config=Constants.expoConfig as any;
-      const projectId=(Constants as any).easConfig?.projectId||config?.extra?.eas?.projectId||process.env.EXPO_PUBLIC_EAS_PROJECT_ID;
+      const projectId=getExpoProjectId();
       if(!projectId){
-        throw new Error('Push notifications are not linked to an EAS project yet. The app needs an EAS project ID and FCM/APNs credentials before background delivery can be enabled.');
+        throw new Error('Push notifications are not linked to an Expo project yet. Add EXPO_PUBLIC_EAS_PROJECT_ID to the Guftin Android build and configure FCM credentials before background delivery can be enabled.');
       }
       const token=(await Notifications.getExpoPushTokenAsync({projectId})).data;
       const {error}=await supabase.from('kc_device_tokens').upsert({
@@ -492,8 +537,7 @@ function GuftinApp() {
     if(!session||pushBusy)return;
     setPushBusy(true);
     try{
-      const config=Constants.expoConfig as any;
-      const projectId=(Constants as any).easConfig?.projectId||config?.extra?.eas?.projectId||process.env.EXPO_PUBLIC_EAS_PROJECT_ID;
+      const projectId=getExpoProjectId();
       if(projectId){
         const token=(await Notifications.getExpoPushTokenAsync({projectId})).data;
         await supabase.from('kc_device_tokens').delete().eq('user_id',session.user.id).eq('token',token);
@@ -503,7 +547,7 @@ function GuftinApp() {
     finally{setPushBusy(false);}
   };
 
-  const dispatchPush=async(kind:'message'|'call'|'status',id:string)=>{
+  const dispatchPush=async(kind:'message'|'call'|'status'|'status_like'|'status_view',id:string)=>{
     try{
       const payload=kind==='message'?{kind,message_id:id}:kind==='call'?{kind,call_id:id}:{kind,status_id:id};
       const {error}=await supabase.functions.invoke('guftin-push',{body:payload});
@@ -702,22 +746,30 @@ function GuftinApp() {
       if(responseId&&handledNotificationResponses.current.has(responseId))return;
       if(responseId)handledNotificationResponses.current.add(responseId);
       const data=response.notification.request.content.data as any;
+      const action=response.actionIdentifier;
       if(data?.type==='incoming_call'&&typeof data.call_id==='string'){
         void supabase.from('kc_call_logs').select('id,conversation_id,caller_id,callee_id,call_type,status')
           .eq('id',data.call_id).maybeSingle().then(({data:call})=>{
-            if(call?.status==='ringing'){
-              setTab('Calls');
-              setIncomingCall(call);
-              Alert.alert(
-                call.call_type==='video'?'Incoming video call':'Incoming voice call',
-                'A Guftin contact is calling you.',
-                [
-                  {text:'Decline',style:'cancel',onPress:()=>void respondToCall(call,'declined')},
-                  {text:'Accept',onPress:()=>void respondToCall(call,'accepted')}
-                ],
-                {cancelable:false}
-              );
+            if(call?.status!=='ringing')return;
+            setTab('Calls');
+            if(action==='accept_call'){
+              void respondToCall(call,'accepted');
+              return;
             }
+            if(action==='decline_call'){
+              void respondToCall(call,'declined');
+              return;
+            }
+            setIncomingCall(call);
+            Alert.alert(
+              call.call_type==='video'?'Incoming video call':'Incoming voice call',
+              'A Guftin contact is calling you.',
+              [
+                {text:'Decline',style:'cancel',onPress:()=>void respondToCall(call,'declined')},
+                {text:'Accept',onPress:()=>void respondToCall(call,'accepted')}
+              ],
+              {cancelable:false}
+            );
           });
       }else if(data?.type==='message'){
         setTab('Chats');
@@ -725,7 +777,7 @@ function GuftinApp() {
           setPendingNotificationConversation(data.conversation_id);
           void loadInbox();
         }
-      }else if(data?.type==='status'){
+      }else if(['status','status_like','status_view'].includes(data?.type)){
         setTab('Updates');
       }
     };
@@ -1231,6 +1283,7 @@ function GuftinApp() {
           {onConflict:'status_id,viewer_id',ignoreDuplicates:true}
         );
         if(viewError)console.warn('Status view not recorded:',viewError.message);
+        else for(const statusId of unseenIds)void dispatchPush('status_view',statusId);
       }
     }
     const [peopleResult,viewsResult,likesResult]=await Promise.all([
@@ -1281,6 +1334,7 @@ function GuftinApp() {
         status_id:status.id,user_id:session.user.id
       });
       if(error&&error.code!=='23505'){Alert.alert('Could not like status',error.message);return;}
+      if(!error)void dispatchPush('status_like',status.id);
     }
     await loadStatuses();
   };
@@ -1545,7 +1599,7 @@ function GuftinApp() {
         </View>
         <Text style={{color:call.status==='accepted'||call.status==='ended'?C.green:C.muted,fontSize:11,fontWeight:'800'}}>{call.status==='missed'?'Missed':call.status==='declined'?'Declined':call.status==='ringing'?'Ringing':'Done'}</Text>
       </View>)}
-      <Text style={{fontSize:10,color:C.muted,marginTop:15,lineHeight:16}}>Incoming calls while the app is closed need push notification credentials and native call-screen integration. Call history works independently.</Text>
+      <Text style={{fontSize:10,color:C.muted,marginTop:15,lineHeight:16}}>Incoming calls can arrive as push alerts while Guftin is closed when notifications are enabled on this phone. Use Accept or Decline on the call notification. Full-screen continuous ringing still depends on native call-screen integration and platform credentials.</Text>
     </ScrollView>:null}
     {tab==='You'?<ScrollView contentContainerStyle={{padding:22}}>
       <View style={{alignItems:'center',padding:25,backgroundColor:C.paper,borderRadius:22}}>
@@ -1617,7 +1671,7 @@ function GuftinApp() {
         <Text style={{color:C.muted,fontSize:12,marginTop:5,marginBottom:15}}>Privacy and connection preferences</Text>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Show online status</Text><Text style={{color:C.muted,fontSize:11}}>Let contacts see when you are online</Text></View><Switch value={onlineVisibility} onValueChange={setOnlineVisibility} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Read receipts</Text><Text style={{color:C.muted,fontSize:11}}>Show seen status on messages</Text></View><Switch value={showReadReceipts} onValueChange={setShowReadReceipts} trackColor={{true:C.green}}/></View>
-        <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Push notifications</Text><Text style={{color:C.muted,fontSize:11}}>Alerts for new messages and incoming calls</Text></View><Switch value={pushEnabled} disabled={pushBusy} onValueChange={enabled=>enabled?void enablePushNotifications():void disablePushNotifications()} trackColor={{true:C.green}}/></View>
+        <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Push notifications on this phone</Text><Text style={{color:C.muted,fontSize:11}}>Messages, status likes/views, and incoming call alerts with Accept/Decline</Text></View><Switch value={pushEnabled} disabled={pushBusy} onValueChange={enabled=>enabled?void enablePushNotifications():void disablePushNotifications()} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Automatic message sync</Text><Text style={{color:C.muted,fontSize:11}}>Refresh while Guftin is open</Text></View><Switch value={autoSync} onValueChange={setAutoSync} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Auto-save incoming photos/videos</Text><Text style={{color:C.muted,fontSize:11}}>Save new media to your gallery automatically</Text></View><Switch value={mediaAutoDownload} onValueChange={setMediaAutoDownload} trackColor={{true:C.green}}/></View>
         <Text style={{color:C.ink,fontWeight:'800',marginTop:12}}>App theme</Text>
