@@ -42,7 +42,7 @@ module.exports = ({ config }) => ({
   android: {
     ...config.android,
     package: "com.guftin.app",
-    versionCode: 12,
+    versionCode: 13,
     // Explicitly register the Supabase OAuth return URL on Android. The broad
     // scheme registration remains in place for other Guftin deep links.
     intentFilters: [
