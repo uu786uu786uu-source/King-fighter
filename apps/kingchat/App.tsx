@@ -18,8 +18,8 @@ import mobileAds, { BannerAd, BannerAdSize, MaxAdContentRating, TestIds } from '
 import { File, Paths } from 'expo-file-system';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import * as ExpoCrypto from 'expo-crypto';
-import { DeviceIdentity, E2EE_MEDIA_PREFIX, E2EE_PREFIX, decryptMediaForDevice, decryptMessageForDevice, encryptMediaForDevices, encryptMessageForDevices, loadOrCreateDeviceIdentity } from './src/lib/e2ee';
-import { AudioSession, LiveKitRoom, VideoTrack, isTrackReference, registerGlobals, useTracks } from '@livekit/react-native';
+import { DeviceIdentity, E2EE_MEDIA_PREFIX, E2EE_PREFIX, decryptCallKeyForDevice, decryptMediaForDevice, decryptMessageForDevice, encryptCallKeyForDevices, encryptMediaForDevices, encryptMessageForDevices, loadOrCreateDeviceIdentity } from './src/lib/e2ee';
+import { AudioSession, LiveKitRoom, VideoTrack, isTrackReference, registerGlobals, useRNE2EEManager, useTracks } from '@livekit/react-native';
 import { Track } from 'livekit-client';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -128,6 +128,23 @@ function CallRoomScreen({callType,onHangUp}:any) {
     </View>
   </SafeAreaView>;
 }
+function SecureLiveKitRoom({liveCall,onDisconnected,onHangUp}:any) {
+  // Each participant unwraps the same random call key from their own device envelope.
+  const {e2eeManager}=useRNE2EEManager({sharedKey:liveCall.e2eeKey});
+  return <LiveKitRoom
+    serverUrl={liveCall.serverUrl}
+    token={liveCall.token}
+    connect={true}
+    audio={true}
+    video={liveCall.callType==='video'}
+    options={{e2ee:{e2eeManager}}}
+    onDisconnected={onDisconnected}
+    onEncryptionError={(error:any)=>Alert.alert('Call encryption error',error?.message||'Media encryption could not be started.')}
+  >
+    <CallRoomScreen callType={liveCall.callType} onHangUp={onHangUp}/>
+  </LiveKitRoom>;
+}
+
 function AudioBubble({uri}:{uri:string}) {
   const [playing,setPlaying]=useState(false);
   const sound=useRef<Audio.Sound|null>(null);
@@ -658,10 +675,17 @@ function GuftinApp() {
     if(!call?.id||joiningCallIds.current.has(call.id))return;
     joiningCallIds.current.add(call.id);
     try{
+      if(!session||!deviceIdentity||e2eeStatus!=='ready')throw new Error('This phone is not ready for encrypted calling. Open Guftin again and make sure secure chat is ready.');
+      const {data:callRecord,error:callRecordError}=await supabase.from('kc_call_logs')
+        .select('id,conversation_id,caller_id,callee_id,call_type,status,e2ee_key_envelopes')
+        .eq('id',call.id).maybeSingle();
+      if(callRecordError)throw callRecordError;
+      if(!callRecord||callRecord.status!=='accepted')throw new Error('The call is no longer accepted.');
+      const e2eeKey=decryptCallKeyForDevice(callRecord.e2ee_key_envelopes,deviceIdentity);
       const {data,error}=await supabase.functions.invoke('livekit-token',{body:{call_id:call.id}});
       if(error)throw error;
       if(!data?.server_url||!data?.participant_token)throw new Error(data?.error||'The LiveKit token endpoint is not ready.');
-      setLiveCall({id:call.id,callType:call.call_type,serverUrl:data.server_url,token:data.participant_token});
+      setLiveCall({id:call.id,callType:callRecord.call_type,serverUrl:data.server_url,token:data.participant_token,e2eeKey});
       setIncomingCall(null);
       setOutgoingCall(null);
     }catch(e:any){
@@ -683,7 +707,7 @@ function GuftinApp() {
     }finally{
       joiningCallIds.current.delete(call.id);
     }
-  },[]);
+  },[session,deviceIdentity,e2eeStatus]);
 
   const respondToCall=useCallback(async(call:any,status:'accepted'|'declined')=>{
     if(!session||!call?.id)return;
@@ -1169,6 +1193,10 @@ function GuftinApp() {
 
   const startCall=async(callType:'voice'|'video')=>{
     if(!active||!session||callBusy)return;
+    if(!deviceIdentity||e2eeStatus!=='ready'){
+      Alert.alert('Secure calling not ready','Open Guftin on both phones and wait until secure chat is ready before starting a call.');
+      return;
+    }
     if(active.kind!=='direct'){
       Alert.alert('Direct calls only','Group calls are not enabled in this first calling build.');
       return;
@@ -1178,14 +1206,29 @@ function GuftinApp() {
       const {data:members,error:memberError}=await supabase.from('kc_conversation_members')
         .select('user_id').eq('conversation_id',active.id);
       if(memberError)throw memberError;
-      const peers=[...new Set((members||[]).map((row:any)=>row.user_id).filter((id:string)=>id!==session.user.id))] as string[];
-      if(peers.length!==1)throw new Error('This call needs exactly one other member in the direct chat.');
+      const memberIds=[...new Set((members||[]).map((row:any)=>row.user_id))] as string[];
+      const peers=memberIds.filter((id:string)=>id!==session.user.id);
+      if(peers.length!==1||memberIds.length!==2)throw new Error('This call needs exactly one other member in the direct chat.');
+      const {data:devices,error:devicesError}=await supabase.from('kc_e2ee_devices')
+        .select('id,user_id,public_key').in('user_id',memberIds).is('revoked_at',null);
+      if(devicesError)throw devicesError;
+      const registeredUsers=new Set((devices||[]).map((device:any)=>device.user_id));
+      if(memberIds.some(id=>!registeredUsers.has(id)))throw new Error('Both users must open the latest Guftin version before making an encrypted call.');
+      if(!(devices||[]).some((device:any)=>device.id===deviceIdentity.deviceId))throw new Error('This phone is not in the conversation encryption roster. Reopen Guftin and try again.');
+      const callKey=ExpoCrypto.getRandomBytes(32);
+      let e2eeKeyEnvelopes:any;
+      try{
+        e2eeKeyEnvelopes=encryptCallKeyForDevices(callKey,devices||[],deviceIdentity);
+      }finally{
+        callKey.fill(0);
+      }
       const {data,error}=await supabase.from('kc_call_logs').insert({
         conversation_id:active.id,
         caller_id:session.user.id,
         callee_id:peers[0],
         call_type:callType,
-        status:'ringing'
+        status:'ringing',
+        e2ee_key_envelopes:e2eeKeyEnvelopes
       }).select('id,conversation_id,caller_id,callee_id,call_type,status').single();
       if(error)throw error;
       setOutgoingCall(data);
@@ -1585,16 +1628,11 @@ function GuftinApp() {
   }
 
   if(liveCall){
-    return <LiveKitRoom
-      serverUrl={liveCall.serverUrl}
-      token={liveCall.token}
-      connect={true}
-      audio={true}
-      video={liveCall.callType==='video'}
+    return <SecureLiveKitRoom
+      liveCall={liveCall}
       onDisconnected={()=>void endCall(liveCall.id)}
-    >
-      <CallRoomScreen callType={liveCall.callType} onHangUp={()=>void endCall(liveCall.id)}/>
-    </LiveKitRoom>;
+      onHangUp={()=>void endCall(liveCall.id)}
+    />;
   }
 
   if(active){
