@@ -36,6 +36,113 @@ export type PublicDeviceKey = {
   public_key: string;
 };
 
+export type EncryptedCallKeyEnvelope = {
+  version: 1;
+  algorithm: 'X25519-XSalsa20-Poly1305';
+  ephemeralPublicKey: string;
+  recipients: Record<string, { nonce: string; ciphertext: string }>;
+};
+
+/**
+ * Encrypt one random 32-byte LiveKit E2EE shared key separately for every
+ * currently registered device in a direct call. The clear key is never sent
+ * to Supabase or LiveKit; only NaCl box ciphertexts are stored with the call.
+ */
+export function encryptCallKeyForDevices(
+  callKey: Uint8Array,
+  devices: PublicDeviceKey[],
+  identity: DeviceIdentity
+): EncryptedCallKeyEnvelope {
+  if (callKey.length !== nacl.secretbox.keyLength) {
+    throw new Error('A call encryption key must be 32 bytes.');
+  }
+  if (!devices.some(device => device.id === identity.deviceId)) {
+    throw new Error('This device is missing from the call encryption roster.');
+  }
+  if (!devices.length) {
+    throw new Error('No encrypted devices are registered for this call.');
+  }
+
+  const ephemeral = nacl.box.keyPair();
+  const recipients: EncryptedCallKeyEnvelope['recipients'] = {};
+
+  try {
+    for (const device of devices) {
+      const publicKey = fromHex(device.public_key);
+      if (publicKey.length !== nacl.box.publicKeyLength) {
+        throw new Error('A participant has an invalid encryption key. Update Guftin on both phones.');
+      }
+      const nonce = Crypto.getRandomBytes(nacl.box.nonceLength);
+      const ciphertext = nacl.box(callKey, nonce, publicKey, ephemeral.secretKey);
+      recipients[device.id] = {
+        nonce: toHex(nonce),
+        ciphertext: toHex(ciphertext)
+      };
+    }
+
+    return {
+      version: 1,
+      algorithm: 'X25519-XSalsa20-Poly1305',
+      ephemeralPublicKey: toHex(ephemeral.publicKey),
+      recipients
+    };
+  } finally {
+    ephemeral.secretKey.fill(0);
+  }
+}
+
+/** Open only this device's encrypted copy of a call key. */
+export function decryptCallKeyForDevice(
+  envelopeValue: EncryptedCallKeyEnvelope | string | null | undefined,
+  identity: DeviceIdentity
+): string {
+  if (!envelopeValue) {
+    throw new Error('This call has no end-to-end encryption key. Both phones must use a recent Guftin version.');
+  }
+
+  let envelope: EncryptedCallKeyEnvelope;
+  try {
+    envelope = typeof envelopeValue === 'string'
+      ? JSON.parse(envelopeValue)
+      : envelopeValue;
+  } catch {
+    throw new Error('The call encryption envelope is invalid.');
+  }
+
+  if (
+    envelope?.version !== 1 ||
+    envelope?.algorithm !== 'X25519-XSalsa20-Poly1305' ||
+    typeof envelope?.ephemeralPublicKey !== 'string' ||
+    !envelope?.recipients ||
+    typeof envelope.recipients !== 'object'
+  ) {
+    throw new Error('This call uses an unsupported encryption format.');
+  }
+
+  const recipient = envelope.recipients[identity.deviceId];
+  if (!recipient) {
+    throw new Error('This call was not encrypted for this device. Reopen Guftin on both phones and try again.');
+  }
+
+  const opened = nacl.box.open(
+    fromHex(recipient.ciphertext),
+    fromHex(recipient.nonce),
+    fromHex(envelope.ephemeralPublicKey),
+    fromHex(identity.secretKeyHex)
+  );
+  if (!opened) {
+    throw new Error('Could not decrypt the call key on this device.');
+  }
+  if (opened.length !== nacl.secretbox.keyLength) {
+    opened.fill(0);
+    throw new Error('The decrypted call key has an invalid length.');
+  }
+
+  const sharedKey = toHex(opened);
+  opened.fill(0);
+  return sharedKey;
+}
+
 type EncryptedEnvelope = {
   version: 1;
   algorithm: 'X25519-XSalsa20-Poly1305';
