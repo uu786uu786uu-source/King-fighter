@@ -5,7 +5,7 @@ Expo React Native app using Supabase Auth, Postgres, Realtime and RLS.
 ## Account and contact model
 
 - Sign up with email, password, display name and a unique username.
-- Sign in with email/password or continue with Google OAuth.
+- Sign in with email and password only.
 - Each account has a public King Chat username (3–24 lowercase letters, numbers or underscores).
 - Use **＋** on the Chats screen to find a member by exact username and create/save a direct conversation.
 - Direct messages are stored in `kc_messages` and synchronized with Supabase Realtime.
@@ -16,11 +16,8 @@ Expo React Native app using Supabase Auth, Postgres, Realtime and RLS.
 1. Apply migrations in `supabase/migrations` in numeric order. The username migration adds profile completion and username lookup RPCs; the privacy migration limits public profile columns.
 2. In **Authentication → Providers → Email**, keep email/password enabled. Email confirmation is recommended.
 3. In **Authentication → URL Configuration → Redirect URLs**, add `kingchat://auth/callback`. The app scheme is `kingchat`.
-4. For Google sign-in, enable **Google** under **Authentication → Providers**, enter the OAuth Web Client ID and Client Secret from the Google Cloud project, and save.
-5. In Google Cloud OAuth client settings, add this Supabase callback URI as an authorized redirect URI:
-   `https://oyjemlbsmffvofefgxvd.supabase.co/auth/v1/callback`
-6. Configure a production SMTP sender for reliable signup confirmation and password recovery emails. Supabase's default sender is rate-limited and intended for testing.
-7. Set `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` in the build environment if using another Supabase project. Never embed a service-role or secret key in the APK.
+4. Configure a production SMTP sender for reliable signup confirmation and password recovery emails. Supabase's default sender is rate-limited and intended for testing.
+5. Set `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` in the build environment if using another Supabase project. Never embed a service-role or secret key in the APK.
 
 ## Build
 
@@ -28,16 +25,24 @@ Expo React Native app using Supabase Auth, Postgres, Realtime and RLS.
 
 ## Current limitations
 
-This release implements email/password auth, a Google OAuth flow, username profiles, username contact discovery, direct chat history, message sending, Realtime updates and profile editing. Google sign-in works only after Google OAuth credentials and the redirect allow-list are configured in Supabase. Voice/video calling, status publishing, media uploads, push notifications, account deletion UX and end-to-end encryption are not implemented yet. Do not present the app as a finished WhatsApp replacement until those areas are built and independently tested.
+This release implements email/password auth, username profiles, username contact discovery, direct chats, group creation, message/media uploads, Realtime updates, status posts/reactions, and a LiveKit voice/video call flow. Voice/video calls still require a valid LiveKit server and the three private Edge Function secrets documented below. Background push still requires an Expo EAS project ID and Firebase FCM V1 credentials. Message encryption is an early implementation and has not had an independent security audit. Do not present the app as a finished WhatsApp replacement until the external services and device-to-device behavior are independently tested.
 
 
 ## Push notifications and gallery saving
 
-- In Guftin Settings, enable **Push notifications** to request OS permission and register this installation in `kc_device_tokens`.
-- Set `EXPO_PUBLIC_EAS_PROJECT_ID` to the project's actual EAS project ID and configure Android FCM v1 credentials and iOS APNs credentials in EAS before expecting notifications while the app is backgrounded or closed.
+- On first launch, Guftin creates its notification channels and asks the OS for notification permission. After sign-in, it registers this device in `kc_device_tokens` when permission is granted. The Settings switch remains available to re-enable notifications.
+- Set the actual Expo EAS project ID as the GitHub Actions variable or secret `EXPO_PUBLIC_EAS_PROJECT_ID`. This value was empty in the previous APK build, so no Expo push token could be registered.
+- Add the Firebase Android configuration file as `apps/kingchat/google-services.json`. The Expo app config automatically includes it when present. Configure the Firebase Cloud Messaging (FCM) V1 service-account key in the linked Expo project's credentials before expecting Android push notifications when the app is in the background or closed.
 - The Supabase `guftin-push` Edge Function sends generic message/call notifications after a message/call is created. No message text is included in the notification payload.
 - Users can save individual photo/video messages to their gallery, or enable auto-save in Settings. Gallery access is requested by the OS when needed.
-- Normal push alerts are not a native full-screen call UI. Background call acceptance still requires platform CallKit/Android Telecom integration and device testing.
+- Incoming call pushes use the `calls` Android notification channel and expose Accept/Decline actions. Android still needs real FCM configuration and physical-device testing; force-stopping the app in Android Settings can prevent delivery until the app is opened again.
+
+
+## LiveKit voice/video calls
+
+- Direct voice/video calls use LiveKit rooms. The app requests a short-lived participant token from the `livekit-token` Supabase Edge Function only after the call is accepted.
+- In Supabase Dashboard → Edge Functions → Secrets, set `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` for the `oyjemlbsmffvofefgxvd` project. Use the server URL and credentials from your LiveKit project. Never put the API secret in the APK, app config, or GitHub source.
+- The previous call attempts returned HTTP 503 because those LiveKit secrets were not configured. Calls cannot connect until all three values are saved.
 
 
 ## AdMob (test mode by default)
