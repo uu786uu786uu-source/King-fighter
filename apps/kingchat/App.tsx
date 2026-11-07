@@ -1748,7 +1748,7 @@ function GuftinApp() {
           <Text style={{fontSize:11,color:C.muted}}>{Math.round(((permissionSetupStep+1)/PERMISSION_SETUP_STEPS.length)*100)}%</Text>
         </View>
         <View style={{height:7,backgroundColor:'#dcebe4',borderRadius:8,overflow:'hidden',marginBottom:20}}>
-          <View style={{height:7,width:(((permissionSetupStep+1)/PERMISSION_SETUP_STEPS.length)*100)+'%',backgroundColor:C.green,borderRadius:8}}/>
+          <View style={{height:7,width:((((permissionSetupStep+1)/PERMISSION_SETUP_STEPS.length)*100)+'%') as any,backgroundColor:C.green,borderRadius:8}}/>
         </View>
         <View style={{backgroundColor:C.white,borderRadius:22,padding:22,borderWidth:1,borderColor:C.line}}>
           <Text style={{fontSize:39,marginBottom:12}}>{step.icon}</Text>
