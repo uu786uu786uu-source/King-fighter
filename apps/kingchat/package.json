@@ -1,6 +1,6 @@
 {
   "name": "guftin-mobile",
-  "version": "1.4.9",
+  "version": "1.4.10",
   "private": true,
   "main": "expo/AppEntry",
   "scripts": {

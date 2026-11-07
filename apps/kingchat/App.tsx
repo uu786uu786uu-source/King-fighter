@@ -41,6 +41,13 @@ const palette = ['#d49a91','#8796c7','#81ad98','#bd8aa8','#c4a47c','#9a91bd'];
 // Supabase chat-media is currently configured for 50 MB per object. Keep encrypted
 // uploads below that ceiling because authenticated encryption adds a small overhead.
 const MAX_MEDIA_BYTES = 45 * 1024 * 1024;
+const PERMISSION_SETUP_STEPS = [
+  {key:'notifications',icon:'🔔',title:'Notifications',description:'Allow message alerts, status likes and views, and incoming voice/video call alerts while Guftin is in the background.'},
+  {key:'microphone',icon:'🎙️',title:'Microphone',description:'Allow the microphone for voice messages and voice/video calls.'},
+  {key:'camera',icon:'📷',title:'Camera',description:'Allow the camera so you can join video calls and share camera video.'},
+  {key:'photos',icon:'🖼️',title:'Photos and videos',description:'Allow photo and video access when you choose a profile picture, share media, or post a status.'},
+  {key:'autoSave',icon:'💾',title:'Save received media to Gallery',description:'Choose whether new photos and videos you receive should be saved automatically to your phone gallery.'}
+] as const;
 const getExpoProjectId=()=>(
   (Constants as any).easConfig?.projectId||
   (Constants.expoConfig as any)?.extra?.eas?.projectId||
@@ -214,6 +221,11 @@ function GuftinApp() {
   const [pushEnabled,setPushEnabled]=useState(false);
   const [pushBusy,setPushBusy]=useState(false);
   const [pushPermissionReady,setPushPermissionReady]=useState(false);
+  const [permissionSetupVisible,setPermissionSetupVisible]=useState(false);
+  const [permissionSetupStep,setPermissionSetupStep]=useState(0);
+  const [permissionSetupBusy,setPermissionSetupBusy]=useState(false);
+  const [permissionSetupAutoSave,setPermissionSetupAutoSave]=useState(true);
+  const [permissionSetupNotice,setPermissionSetupNotice]=useState('');
   const [themeName,setThemeName]=useState('emerald');
   const [deliveredByMessage,setDeliveredByMessage]=useState<Record<string,string>>({});
   const hiddenMessageIds=useRef(new Set<string>());
@@ -282,27 +294,13 @@ function GuftinApp() {
     void AsyncStorage.setItem('guftin-preferences',JSON.stringify({showReadReceipts,onlineVisibility,autoSync,syncIntervalSeconds,mediaAutoDownload,themeName}));
   },[settingsLoaded,showReadReceipts,onlineVisibility,autoSync,syncIntervalSeconds,mediaAutoDownload,themeName]);
 
-  // Ask for notification permission once on the first app launch, after creating
-  // Android channels (required by Android 13+ before the permission dialog can show).
-  // Push-token registration waits for this request to finish and for Auth to restore.
+  // Create Android notification channels at startup; request OS permissions only
+  // after sign-in and profile completion in the permission walkthrough below.
   useEffect(()=>{
     let mounted=true;
-    const requestNotificationPermissionOnFirstLaunch=async()=>{
-      try{
-        await configureGuftinNotificationChannels();
-        let permission=await Notifications.getPermissionsAsync();
-        const alreadyPrompted=await AsyncStorage.getItem('guftin-notification-permission-prompted-v1');
-        if(!permission.granted&&!alreadyPrompted&&permission.canAskAgain!==false){
-          await AsyncStorage.setItem('guftin-notification-permission-prompted-v1','yes');
-          permission=await Notifications.requestPermissionsAsync();
-        }
-        if(mounted)setPushPermissionReady(true);
-      }catch(error:any){
-        console.warn('First-launch notification permission setup:',error?.message||error);
-        if(mounted)setPushPermissionReady(true);
-      }
-    };
-    void requestNotificationPermissionOnFirstLaunch();
+    void configureGuftinNotificationChannels()
+      .catch(error=>console.warn('Notification channel setup:',error?.message||error))
+      .finally(()=>{if(mounted)setPushPermissionReady(true);});
     return ()=>{mounted=false;};
   },[]);
 
@@ -356,6 +354,32 @@ function GuftinApp() {
     Linking.getInitialURL().then(url=>{if(url) void completeAuthUrl(url);});
     return ()=>{mounted=false;subscription.unsubscribe();linkSub.remove();};
   },[completeAuthUrl]);
+
+  // Show the walkthrough once for each signed-in account on this phone.
+  useEffect(()=>{
+    let active=true;
+    if(!session?.user?.id){
+      setPermissionSetupVisible(false);
+      return;
+    }
+    if(!profileReady || profile?.id!==session.user.id || !profile?.username || !settingsLoaded || !pushPermissionReady)return;
+    const key='guftin-permission-setup-v1:'+session.user.id;
+    void AsyncStorage.getItem(key).then(done=>{
+      if(!active)return;
+      if(done!=='completed'){
+        setPermissionSetupStep(0);
+        setPermissionSetupAutoSave(true);
+        setPermissionSetupNotice('');
+        setPermissionSetupVisible(true);
+      }else{
+        setPermissionSetupVisible(false);
+      }
+    }).catch(error=>{
+      console.warn('Permission setup status:',error?.message||error);
+      if(active){setPermissionSetupStep(0);setPermissionSetupVisible(true);}
+    });
+    return ()=>{active=false;};
+  },[session?.user?.id,profile?.id,profile?.username,profileReady,settingsLoaded,pushPermissionReady]);
 
   useEffect(()=>{
     const onHardwareBack=()=>{
@@ -619,6 +643,86 @@ function GuftinApp() {
       setPushEnabled(false);
     }catch(e:any){Alert.alert('Could not turn notifications off',e?.message||'Please try again.');}
     finally{setPushBusy(false);}
+  };
+
+  const finishPermissionSetup=async()=>{
+    if(!session?.user?.id)return;
+    try{await AsyncStorage.setItem('guftin-permission-setup-v1:'+session.user.id,'completed');}
+    catch(error:any){console.warn('Could not save permission setup completion:',error?.message||error);}
+    setPermissionSetupVisible(false);
+    setPermissionSetupNotice('');
+  };
+
+  const advancePermissionSetup=async()=>{
+    if(permissionSetupStep>=PERMISSION_SETUP_STEPS.length-1)await finishPermissionSetup();
+    else{setPermissionSetupStep(current=>current+1);setPermissionSetupNotice('');}
+  };
+
+  const skipPermissionSetupStep=async()=>{
+    if(PERMISSION_SETUP_STEPS[permissionSetupStep]?.key==='autoSave')setMediaAutoDownload(false);
+    await advancePermissionSetup();
+  };
+
+  const requestPermissionSetupStep=async()=>{
+    if(!session||permissionSetupBusy)return;
+    const step=PERMISSION_SETUP_STEPS[permissionSetupStep];
+    if(!step)return;
+    setPermissionSetupBusy(true);
+    setPermissionSetupNotice('');
+    try{
+      let granted=false;
+      let canAskAgain=true;
+      if(step.key==='notifications'){
+        await configureGuftinNotificationChannels();
+        let permission=await Notifications.getPermissionsAsync();
+        if(!permission.granted&&permission.canAskAgain!==false)permission=await Notifications.requestPermissionsAsync();
+        granted=permission.granted;
+        canAskAgain=permission.canAskAgain;
+        if(granted){
+          const projectId=getExpoProjectId();
+          if(projectId){
+            try{
+              const token=(await Notifications.getExpoPushTokenAsync({projectId})).data;
+              const {error}=await supabase.from('kc_device_tokens').upsert({
+                user_id:session.user.id,token,platform:Platform.OS
+              },{onConflict:'token'});
+              if(error){setPushEnabled(false);setPermissionSetupNotice('Android permission is allowed, but this device token could not be registered with the push service.');}
+              else setPushEnabled(true);
+            }catch(error:any){
+              setPushEnabled(false);
+              setPermissionSetupNotice(error?.message||'Android permission is allowed. Expo/Firebase push registration still needs configuration.');
+            }
+          }else{
+            setPushEnabled(false);
+            setPermissionSetupNotice('Android permission is allowed. Background delivery still needs the Expo project ID and Firebase push credentials.');
+          }
+        }
+      }else if(step.key==='microphone'){
+        const permission=await Audio.requestPermissionsAsync();
+        granted=permission.granted;canAskAgain=permission.canAskAgain;
+      }else if(step.key==='camera'){
+        const permission=await ImagePicker.requestCameraPermissionsAsync();
+        granted=permission.granted;canAskAgain=permission.canAskAgain;
+      }else if(step.key==='photos'){
+        const permission=await ImagePicker.requestMediaLibraryPermissionsAsync(false);
+        granted=permission.granted;canAskAgain=permission.canAskAgain;
+      }else if(step.key==='autoSave'){
+        if(!permissionSetupAutoSave){
+          setMediaAutoDownload(false);
+          granted=true;
+        }else{
+          const permission=await MediaLibrary.requestPermissionsAsync(true,['photo','video']);
+          granted=permission.granted;canAskAgain=permission.canAskAgain;
+          setMediaAutoDownload(permission.granted);
+        }
+      }
+      if(!granted&&canAskAgain===false){
+        Alert.alert('Permission is turned off','Android will not show this permission prompt again. You can enable it later in Settings → Apps → Guftin → Permissions.');
+      }
+      await advancePermissionSetup();
+    }catch(error:any){
+      Alert.alert('Permission request failed',error?.message||'You can skip this permission and change it later in Android settings.');
+    }finally{setPermissionSetupBusy(false);}
   };
 
   const dispatchPush=async(kind:'message'|'call'|'status'|'status_like'|'status_view',id:string)=>{
@@ -1627,6 +1731,51 @@ function GuftinApp() {
     </SafeAreaView>;
   }
 
+  if(permissionSetupVisible&&session){
+    const step=PERMISSION_SETUP_STEPS[permissionSetupStep];
+    return <SafeAreaView style={{flex:1,backgroundColor:C.paper,paddingHorizontal:22}}>
+      <StatusBar barStyle="dark-content"/>
+      <ScrollView contentContainerStyle={{flexGrow:1,justifyContent:'center',paddingVertical:28}}>
+        <View style={{alignItems:'center',marginBottom:26}}>
+          <Avatar label="K" color={C.green} size={70}/>
+          <Heading>Guftin setup</Heading>
+          <Text style={{color:C.muted,fontSize:12,marginTop:7,textAlign:'center'}}>Set your device permissions</Text>
+        </View>
+        <Text style={{fontSize:23,fontWeight:'900',color:C.ink,marginBottom:8}}>Allow the features you want</Text>
+        <Text style={{color:C.muted,fontSize:13,lineHeight:20,marginBottom:18}}>Guftin will ask one permission at a time. Press Allow to open the Android permission prompt, or Not now to skip it. You can change these choices later in Settings.</Text>
+        <View style={{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+          <Text style={{fontSize:11,color:C.green,fontWeight:'900'}}>STEP {permissionSetupStep+1} OF {PERMISSION_SETUP_STEPS.length}</Text>
+          <Text style={{fontSize:11,color:C.muted}}>{Math.round(((permissionSetupStep+1)/PERMISSION_SETUP_STEPS.length)*100)}%</Text>
+        </View>
+        <View style={{height:7,backgroundColor:'#dcebe4',borderRadius:8,overflow:'hidden',marginBottom:20}}>
+          <View style={{height:7,width:(((permissionSetupStep+1)/PERMISSION_SETUP_STEPS.length)*100)+'%',backgroundColor:C.green,borderRadius:8}}/>
+        </View>
+        <View style={{backgroundColor:C.white,borderRadius:22,padding:22,borderWidth:1,borderColor:C.line}}>
+          <Text style={{fontSize:39,marginBottom:12}}>{step.icon}</Text>
+          <Text style={{fontSize:21,fontWeight:'900',color:C.ink,marginBottom:8}}>{step.title}</Text>
+          <Text style={{fontSize:13,color:C.muted,lineHeight:20}}>{step.description}</Text>
+          {step.key==='autoSave'?<View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',marginTop:20,paddingTop:15,borderTopWidth:1,borderColor:C.line}}>
+            <View style={{flex:1,paddingRight:12}}>
+              <Text style={{fontSize:13,fontWeight:'900',color:C.ink}}>Turn on automatic gallery saving</Text>
+              <Text style={{fontSize:11,color:C.muted,marginTop:4}}>When enabled, new incoming photos and videos can be saved automatically.</Text>
+            </View>
+            <Switch value={permissionSetupAutoSave} onValueChange={setPermissionSetupAutoSave} trackColor={{true:C.green}}/>
+          </View>:null}
+          {permissionSetupNotice?<Text style={{fontSize:11,color:C.muted,lineHeight:17,marginTop:15}}>{permissionSetupNotice}</Text>:null}
+        </View>
+        <View style={{flexDirection:'row',gap:10,marginTop:22}}>
+          <Btn disabled={permissionSetupBusy} onPress={()=>void skipPermissionSetupStep()} style={{flex:1,padding:15,borderRadius:14,alignItems:'center',backgroundColor:C.white,borderWidth:1,borderColor:C.line}}>
+            <Text style={{color:C.ink,fontWeight:'800'}}>Not now</Text>
+          </Btn>
+          <Btn disabled={permissionSetupBusy} onPress={()=>void requestPermissionSetupStep()} style={{flex:1,padding:15,borderRadius:14,alignItems:'center',backgroundColor:C.green}}>
+            {permissionSetupBusy?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'900'}}>{step.key==='autoSave'?'Save choice':'Allow'}</Text>}
+          </Btn>
+        </View>
+        <Text style={{fontSize:10,color:C.muted,textAlign:'center',lineHeight:16,marginTop:18}}>Contacts and location permission are not needed for username-based Guftin chats. Android only grants access when you choose Allow.</Text>
+      </ScrollView>
+    </SafeAreaView>;
+  }
+
   if(liveCall){
     return <SecureLiveKitRoom
       liveCall={liveCall}
@@ -1870,6 +2019,9 @@ function GuftinApp() {
       <View style={{flex:1,backgroundColor:'#0008',justifyContent:'flex-end'}}><View style={{backgroundColor:C.white,borderTopLeftRadius:24,borderTopRightRadius:24,padding:22}}>
         <Text style={{fontSize:21,fontWeight:'900',color:C.ink}}>Guftin settings</Text>
         <Text style={{color:C.muted,fontSize:12,marginTop:5,marginBottom:15}}>Privacy and connection preferences</Text>
+        <Btn onPress={()=>{setSettingsOpen(false);setPermissionSetupStep(0);setPermissionSetupAutoSave(mediaAutoDownload);setPermissionSetupNotice('');setPermissionSetupVisible(true);}} style={{backgroundColor:C.mint,padding:12,borderRadius:13,marginBottom:7}}>
+          <Text style={{color:C.green,fontWeight:'900',textAlign:'center'}}>Review app permissions</Text>
+        </Btn>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Show online status</Text><Text style={{color:C.muted,fontSize:11}}>Let contacts see when you are online</Text></View><Switch value={onlineVisibility} onValueChange={setOnlineVisibility} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Read receipts</Text><Text style={{color:C.muted,fontSize:11}}>Show seen status on messages</Text></View><Switch value={showReadReceipts} onValueChange={setShowReadReceipts} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Push notifications on this phone</Text><Text style={{color:C.muted,fontSize:11}}>Messages, status likes/views, and incoming call alerts with Accept/Decline</Text></View><Switch value={pushEnabled} disabled={pushBusy} onValueChange={enabled=>enabled?void enablePushNotifications():void disablePushNotifications()} trackColor={{true:C.green}}/></View>
