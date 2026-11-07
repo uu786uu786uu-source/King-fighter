@@ -28,7 +28,7 @@ module.exports = ({ config }) => ({
     ...(config.extra || {}),
     eas: {
       ...(config.extra?.eas || {}),
-      ...(process.env.EXPO_PUBLIC_EAS_PROJECT_ID ? { projectId: process.env.EXPO_PUBLIC_EAS_PROJECT_ID } : {})
+      projectId: process.env.EXPO_PUBLIC_EAS_PROJECT_ID || config.extra?.eas?.projectId || "814cd723-8bea-4288-84b5-d489fdb37269"
     }
   },
   name: "Guftin",
