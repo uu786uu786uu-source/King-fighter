@@ -35,7 +35,7 @@ const THEMES:any = {
   night:{ink:'#edf3ff',muted:'#9baac0',green:'#77b9ff',mint:'#223d5d',paper:'#101a2b',white:'#1a2940',line:'#2a3b54',red:'#ff8894'}
 };
 type Chat = { id:string; name:string; avatar:string; avatarUrl?:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number };
-type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; attachment_url?:string|null; created_at:string; mine:boolean; deleted_at?:string|null };
+type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; attachment_url?:string|null; created_at:string; mine:boolean; deleted_at?:string|null; pending?:boolean };
 const AUTH_REDIRECT_URL = 'kingchat://auth/callback';
 const palette = ['#d49a91','#8796c7','#81ad98','#bd8aa8','#c4a47c','#9a91bd'];
 // Supabase chat-media is currently configured for 50 MB per object. Keep encrypted
@@ -81,6 +81,10 @@ const timeLabel = (value:string) => {
   if(d.toDateString()===now.toDateString()) return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
   const yesterday=new Date(now); yesterday.setDate(now.getDate()-1);
   return d.toDateString()===yesterday.toDateString()?'Yesterday':d.toLocaleDateString([], {day:'numeric',month:'short'});
+};
+const isConnectivityFailure=(error:any)=>{
+  const message=String(error?.message||error||'').toLowerCase();
+  return error?.name==='TypeError'||/network request failed|failed to fetch|network is unreachable|connection refused|connection reset|timed out|timeout|offline|internet disconnected/.test(message);
 };
 function Btn({children,onPress,onLongPress,style,disabled}:any) {
   return <TouchableOpacity disabled={disabled} onPress={onPress} onLongPress={onLongPress} delayLongPress={420} activeOpacity={.75} style={[style,disabled?{opacity:.55}:null]}>{children}</TouchableOpacity>;
@@ -155,6 +159,7 @@ function GuftinApp() {
   const [peerLastReadAt,setPeerLastReadAt]=useState<string|null>(null);
   const activeConversationIdRef=useRef<string|null>(null);
   const loadMessagesRef=useRef<((id:string)=>Promise<void>)|null>(null);
+  const flushPendingMessagesRef=useRef<(()=>Promise<void>)|null>(null);
   useEffect(()=>{
     activeConversationIdRef.current=active?.id||null;
   },[active?.id]);
@@ -356,11 +361,29 @@ function GuftinApp() {
 
   const loadProfile=useCallback(async()=>{
     if(!session) return;
+    const profileCacheKey='guftin-cache-profile:'+session.user.id;
+    try{
+      const cached=await AsyncStorage.getItem(profileCacheKey);
+      if(cached){
+        const cachedProfile=JSON.parse(cached);
+        setProfile(cachedProfile);
+        setProfileName(cachedProfile?.display_name||'');
+        setProfileUsername(cachedProfile?.username||'');
+        setAbout(cachedProfile?.about||'');
+        setProfileAvatarPath(cachedProfile?.avatar_url||'');
+        setProfileReady(true);
+      }
+    }catch{ /* Keep the app usable if the local profile cache is unreadable. */ }
     const {data,error}=await supabase.from('kc_profiles')
       .select('id,display_name,username,about,avatar_url,is_online')
       .eq('id',session.user.id).maybeSingle();
-    if(error){console.warn('Profile load:',error.message);setProfileReady(true);return;}
+    if(error){
+      if(!isConnectivityFailure(error))console.warn('Profile load:',error.message);
+      setProfileReady(true);
+      return;
+    }
     setProfile(data);
+    void AsyncStorage.setItem(profileCacheKey,JSON.stringify(data)).catch(()=>{});
     setProfileName(data?.display_name||session.user.user_metadata?.display_name||'');
     setProfileUsername(data?.username||session.user.user_metadata?.username||'');
     setAbout(data?.about||'');
@@ -372,6 +395,11 @@ function GuftinApp() {
 
   const loadInbox=useCallback(async()=>{
     if(!session) return;
+    const inboxCacheKey='guftin-cache-inbox:'+session.user.id;
+    try{
+      const cached=await AsyncStorage.getItem(inboxCacheKey);
+      if(cached){const parsed=JSON.parse(cached);if(Array.isArray(parsed)){setChats(parsed);setLoading(false);}}
+    }catch{ /* Ignore a damaged local inbox cache and try the server. */ }
     try{
       const {data:memberships,error}=await supabase.from('kc_conversation_members')
         .select('conversation_id,joined_at,last_read_at,hidden_at,conversation:kc_conversations!inner(id,kind,title,photo_url,updated_at)')
@@ -379,7 +407,7 @@ function GuftinApp() {
       if(error) throw error;
       const rows=(memberships||[]) as any[];
       const ids=rows.map(r=>r.conversation_id).filter(Boolean);
-      if(ids.length===0){setChats([]);return;}
+      if(ids.length===0){setChats([]);void AsyncStorage.setItem(inboxCacheKey,'[]').catch(()=>{});return;}
       const [memberResult,profileResult,messageResult,hiddenResult]=await Promise.all([
         supabase.from('kc_conversation_members').select('conversation_id,user_id,last_read_at,joined_at').in('conversation_id',ids),
         supabase.from('kc_profiles').select('id,display_name,avatar_url,is_online').neq('id',session.user.id),
@@ -430,8 +458,9 @@ function GuftinApp() {
           lastAt:last?new Date(last.created_at).getTime():new Date(conv.updated_at||row.joined_at).getTime()};
       }))).sort((a,b)=>b.lastAt-a.lastAt);
       setChats(mapped);
+      void AsyncStorage.setItem(inboxCacheKey,JSON.stringify(mapped)).catch(()=>{});
     }catch(e:any){
-      Alert.alert('Inbox could not load',e?.message||'Please check your connection and try again.');
+      if(!isConnectivityFailure(e))Alert.alert('Inbox could not load',e?.message||'Please try again.');
     }finally{setLoading(false);}
   },[session,deviceIdentity,getSignedMediaUrl]);
 
@@ -639,7 +668,12 @@ function GuftinApp() {
     void supabase.from('kc_profiles').update({is_online:true,last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
     const appState=AppState.addEventListener('change',(state)=>{
       void supabase.from('kc_profiles').update({is_online:onlineVisibility&&state==='active',last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
-      if(state==='active'){void loadInbox();if(activeConversationIdRef.current)void loadMessagesRef.current?.(activeConversationIdRef.current);void loadProfile();}
+      if(state==='active'){
+        void loadInbox();
+        if(activeConversationIdRef.current)void loadMessagesRef.current?.(activeConversationIdRef.current);
+        void loadProfile();
+        void flushPendingMessagesRef.current?.();
+      }
     });
     const channel=supabase.channel('kingchat-user-'+session.user.id)
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'kc_messages'},async payload=>{
@@ -706,6 +740,7 @@ function GuftinApp() {
       }).subscribe((status,error)=>{
         if(status==='SUBSCRIBED'){
           console.log('Guftin realtime connected');
+          void flushPendingMessagesRef.current?.();
         }else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'||status==='CLOSED'){
           console.warn('Guftin realtime unavailable; automatic sync will use polling.',error?.message||status);
         }
@@ -713,10 +748,13 @@ function GuftinApp() {
     // Realtime is the fast path. Polling is a recovery path for devices or
     // projects where Postgres Changes is not enabled or the socket drops.
     const syncTimer=setInterval(()=>{
-      if(autoSync&&AppState.currentState==='active'){
-        void loadInbox();
-        const conversationId=activeConversationIdRef.current;
-        if(conversationId)void loadMessagesRef.current?.(conversationId);
+      if(AppState.currentState==='active'){
+        if(autoSync){
+          void loadInbox();
+          const conversationId=activeConversationIdRef.current;
+          if(conversationId)void loadMessagesRef.current?.(conversationId);
+        }
+        void flushPendingMessagesRef.current?.();
       }
     },Math.max(3,syncIntervalSeconds)*1000);
     return ()=>{
@@ -790,16 +828,22 @@ function GuftinApp() {
 
   const loadMessages=useCallback(async(conversationId:string)=>{
     if(!session) return;
+    const messageCacheKey='guftin-cache-messages:'+session.user.id+':'+conversationId;
+    try{
+      const cached=await AsyncStorage.getItem(messageCacheKey);
+      if(cached){const parsed=JSON.parse(cached);if(Array.isArray(parsed))setMessages(prev=>({...prev,[conversationId]:parsed}));}
+    }catch{ /* Ignore a damaged message cache and continue with the server request. */ }
     const {data,error}=await supabase.from('kc_messages')
       .select('id,conversation_id,sender_id,body,message_type,attachment_url,created_at,deleted_at')
       .eq('conversation_id',conversationId)
       .order('created_at',{ascending:true}).limit(200);
-    if(error){Alert.alert('Messages could not load',error.message);return;}
+    if(error){if(!isConnectivityFailure(error))Alert.alert('Messages could not load',error.message);return;}
     const {data:hiddenRows}=await supabase.from('kc_message_hidden').select('message_id').eq('user_id',session.user.id);
     const hidden=new Set((hiddenRows||[]).map((row:any)=>row.message_id));
     const visibleRows=(data||[]).filter((message:any)=>!hidden.has(message.id));
     const resolved=await Promise.all(visibleRows.map((m:any)=>resolveMessage(m)));
     setMessages(prev=>({...prev,[conversationId]:resolved}));
+    void AsyncStorage.setItem(messageCacheKey,JSON.stringify(resolved.map(item=>({...item,attachment_url:null})))).catch(()=>{});
     const ownMessageIds=visibleRows.filter((m:any)=>m.sender_id===session.user.id&&!m.deleted_at).map((m:any)=>m.id);
     const {data:memberList}=await supabase.from('kc_conversation_members').select('user_id,last_read_at').eq('conversation_id',conversationId);
     const peerMember=(memberList||[]).find((member:any)=>member.user_id!==session.user.id);
@@ -850,6 +894,27 @@ function GuftinApp() {
     }
   },[pendingNotificationConversation,chats]);
 
+  const queueOfflineTextMessage=async(conversationId:string,text:string)=>{
+    if(!session)return;
+    const id=ExpoCrypto.randomUUID();
+    const localId='pending:'+id;
+    const queueKey='guftin-pending-messages:'+session.user.id;
+    const entry={id,localId,conversation_id:conversationId,text,created_at:new Date().toISOString()};
+    let queue:any[]=[];
+    try{const raw=await AsyncStorage.getItem(queueKey);queue=raw?JSON.parse(raw):[];if(!Array.isArray(queue))queue=[];}catch{queue=[];}
+    queue.push(entry);
+    await AsyncStorage.setItem(queueKey,JSON.stringify(queue));
+    const optimistic:Message={id:localId,conversation_id:conversationId,sender_id:session.user.id,body:text,message_type:'text',created_at:entry.created_at,mine:true,pending:true};
+    setMessages(prev=>({...prev,[conversationId]:[...(prev[conversationId]||[]).filter(item=>item.id!==localId),optimistic]}));
+    setChats(prev=>{
+      const next=prev.map(chat=>chat.id===conversationId?{...chat,last:text,time:timeLabel(entry.created_at),lastAt:Date.now()}:chat);
+      void AsyncStorage.setItem('guftin-cache-inbox:'+session.user.id,JSON.stringify(next)).catch(()=>{});
+      return next;
+    });
+    void AsyncStorage.setItem('guftin-cache-messages:'+session.user.id+':'+conversationId,JSON.stringify([...(messages[conversationId]||[]).filter(item=>item.id!==localId),optimistic].map(item=>({...item,attachment_url:null})))).catch(()=>{});
+    setDraft('');
+  };
+
   const sendMessage=async()=>{
     const body=draft.trim();
     if(!body||!active||!session||sending) return;
@@ -888,11 +953,70 @@ function GuftinApp() {
       });
       void loadInbox();
     }catch(e:any){
-      Alert.alert('Secure message not sent',e?.message||'Please try again.');
+      if(isConnectivityFailure(e)){
+        try{await queueOfflineTextMessage(conversationId,body);}
+        catch(queueError:any){Alert.alert('Message could not be saved',queueError?.message||'This device could not store the pending message.');}
+      }else{
+        Alert.alert('Secure message not sent',e?.message||'Please try again.');
+      }
     }finally{
       setSending(false);
     }
   };
+
+  const flushPendingMessages=useCallback(async()=>{
+    if(!session||!deviceIdentity||e2eeStatus!=='ready')return;
+    const queueKey='guftin-pending-messages:'+session.user.id;
+    let queue:any[]=[];
+    try{const raw=await AsyncStorage.getItem(queueKey);queue=raw?JSON.parse(raw):[];}catch{return;}
+    if(!Array.isArray(queue)||queue.length===0)return;
+    const remaining:any[]=[];
+    for(let index=0;index<queue.length;index++){
+      const pending=queue[index];
+      try{
+        const {data:members,error:membersError}=await supabase.from('kc_conversation_members')
+          .select('user_id').eq('conversation_id',pending.conversation_id);
+        if(membersError)throw membersError;
+        const memberIds=[...new Set((members||[]).map((row:any)=>row.user_id))] as string[];
+        if(!memberIds.includes(session.user.id))throw new Error('You are no longer a member of this conversation.');
+        const {data:devices,error:devicesError}=await supabase.from('kc_e2ee_devices')
+          .select('id,user_id,public_key').in('user_id',memberIds).is('revoked_at',null);
+        if(devicesError)throw devicesError;
+        const registeredUsers=new Set((devices||[]).map((device:any)=>device.user_id));
+        if(memberIds.some(id=>!registeredUsers.has(id)))throw new Error('A conversation member has not registered an encryption device yet.');
+        const encryptedBody=encryptMessageForDevices(pending.text,devices||[],deviceIdentity);
+        const inserted=await supabase.from('kc_messages').insert({
+          id:pending.id,conversation_id:pending.conversation_id,sender_id:session.user.id,
+          body:encryptedBody,message_type:'text'
+        }).select('id,conversation_id,sender_id,message_type,created_at').single();
+        let saved=inserted.data;
+        if(inserted.error){
+          if(inserted.error.code==='23505'){
+            const existing=await supabase.from('kc_messages')
+              .select('id,conversation_id,sender_id,message_type,created_at').eq('id',pending.id).maybeSingle();
+            if(existing.error||!existing.data)throw inserted.error;
+            saved=existing.data;
+          }else throw inserted.error;
+        }
+        if(!saved)throw new Error('The queued message was not confirmed by the server.');
+        const sentItem:Message={...saved,body:pending.text,mine:true,pending:false};
+        setMessages(prev=>({...prev,[pending.conversation_id]:[
+          ...(prev[pending.conversation_id]||[]).filter(item=>item.id!==pending.localId&&item.id!==pending.id),sentItem
+        ]}));
+        void dispatchPush('message',saved.id);
+      }catch(error:any){
+        remaining.push(...queue.slice(index));
+        if(!isConnectivityFailure(error))console.warn('Pending message remains queued:',error?.message||error);
+        break;
+      }
+    }
+    await AsyncStorage.setItem(queueKey,JSON.stringify(remaining)).catch(()=>{});
+    if(remaining.length<queue.length)void loadInbox();
+  },[session,deviceIdentity,e2eeStatus,loadInbox]);
+  flushPendingMessagesRef.current=flushPendingMessages;
+  useEffect(()=>{
+    if(session&&deviceIdentity&&e2eeStatus==='ready')void flushPendingMessages();
+  },[session?.user?.id,deviceIdentity?.deviceId,e2eeStatus,flushPendingMessages]);
 
   const uploadVoiceMessage=async(uri:string)=>{
     if(!active||!session||!deviceIdentity||e2eeStatus!=='ready')throw new Error('Secure chat is not ready.');
@@ -1265,7 +1389,7 @@ function GuftinApp() {
       .select('id,user_id,caption,media_url,created_at,expires_at')
       .gt('expires_at',new Date().toISOString())
       .order('created_at',{ascending:false}).limit(100);
-    if(error){Alert.alert('Statuses could not load',error.message);return;}
+    if(error){if(!isConnectivityFailure(error))Alert.alert('Statuses could not load',error.message);return;}
     const rows=(data||[]) as any[];
     const ids=rows.map(row=>row.id);
     if(!ids.length){setStatuses([]);return;}
@@ -1454,7 +1578,7 @@ function GuftinApp() {
           {item.deleted_at?<Text style={{fontSize:12,color:C.muted,fontStyle:'italic'}}>This message was deleted</Text>:item.message_type==='image'&&item.attachment_url?<Image source={{uri:item.attachment_url}} style={{width:210,height:210,borderRadius:12}} resizeMode="cover"/>:item.message_type==='video'&&item.attachment_url?<VideoBubble uri={item.attachment_url}/>:item.message_type==='audio'&&item.attachment_url?<AudioBubble uri={item.attachment_url}/>:<Text style={{color:C.ink,fontSize:14,lineHeight:21}}>{item.body||'Attachment'}</Text>}
           {!item.deleted_at&&['image','video'].includes(item.message_type)&&item.attachment_url?<Btn onPress={()=>void saveMediaToGallery(item)} style={{marginTop:7,paddingVertical:6,paddingHorizontal:9,borderRadius:9,backgroundColor:C.paper,alignSelf:'flex-start'}}><Text style={{fontSize:11,color:C.green,fontWeight:'800'}}>↓ Save to gallery</Text></Btn>:null}
           <Text style={{textAlign:'right',fontSize:9,color:C.muted,marginTop:5}}>
-            {timeLabel(item.created_at)}{item.mine ? " · " + (showReadReceipts && peerLastReadAt && new Date(peerLastReadAt).getTime() >= new Date(item.created_at).getTime() ? "✓✓ Read" : deliveredByMessage[item.id] ? "✓✓ Delivered" : "✓ Sent") : ""}
+            {timeLabel(item.created_at)}{item.pending?' · Queued':item.mine ? " · " + (showReadReceipts && peerLastReadAt && new Date(peerLastReadAt).getTime() >= new Date(item.created_at).getTime() ? "✓✓ Read" : deliveredByMessage[item.id] ? "✓✓ Delivered" : "✓ Sent") : ""}
           </Text>
         </TouchableOpacity>}/>
       <KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':undefined}>
