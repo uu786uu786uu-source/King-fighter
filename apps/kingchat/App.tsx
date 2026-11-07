@@ -196,6 +196,7 @@ function GuftinApp() {
   const [adsReady,setAdsReady]=useState(false);
   const [pushEnabled,setPushEnabled]=useState(false);
   const [pushBusy,setPushBusy]=useState(false);
+  const [pushPermissionReady,setPushPermissionReady]=useState(false);
   const [themeName,setThemeName]=useState('emerald');
   const [deliveredByMessage,setDeliveredByMessage]=useState<Record<string,string>>({});
   const hiddenMessageIds=useRef(new Set<string>());
@@ -263,6 +264,30 @@ function GuftinApp() {
     if(!settingsLoaded)return;
     void AsyncStorage.setItem('guftin-preferences',JSON.stringify({showReadReceipts,onlineVisibility,autoSync,syncIntervalSeconds,mediaAutoDownload,themeName}));
   },[settingsLoaded,showReadReceipts,onlineVisibility,autoSync,syncIntervalSeconds,mediaAutoDownload,themeName]);
+
+  // Ask for notification permission once on the first app launch, after creating
+  // Android channels (required by Android 13+ before the permission dialog can show).
+  // Push-token registration waits for this request to finish and for Auth to restore.
+  useEffect(()=>{
+    let mounted=true;
+    const requestNotificationPermissionOnFirstLaunch=async()=>{
+      try{
+        await configureGuftinNotificationChannels();
+        let permission=await Notifications.getPermissionsAsync();
+        const alreadyPrompted=await AsyncStorage.getItem('guftin-notification-permission-prompted-v1');
+        if(!permission.granted&&!alreadyPrompted&&permission.canAskAgain!==false){
+          await AsyncStorage.setItem('guftin-notification-permission-prompted-v1','yes');
+          permission=await Notifications.requestPermissionsAsync();
+        }
+        if(mounted)setPushPermissionReady(true);
+      }catch(error:any){
+        console.warn('First-launch notification permission setup:',error?.message||error);
+        if(mounted)setPushPermissionReady(true);
+      }
+    };
+    void requestNotificationPermissionOnFirstLaunch();
+    return ()=>{mounted=false;};
+  },[]);
 
   const completeAuthUrl=useCallback(async(url:string)=>{
     if(!url||handledAuthUrls.current.has(url)) return;
@@ -520,11 +545,14 @@ function GuftinApp() {
     let mounted=true;
     const registerPreviouslyAllowedDevice=async()=>{
       setPushEnabled(false);
-      if(!session)return;
+      if(!session||!pushPermissionReady)return;
       const permission=await Notifications.getPermissionsAsync();
       if(!permission.granted)return;
       const projectId=getExpoProjectId();
-      if(!projectId)return;
+      if(!projectId){
+        console.warn('Push permission is granted, but EXPO_PUBLIC_EAS_PROJECT_ID is missing from this build.');
+        return;
+      }
       await configureGuftinNotificationChannels();
       const token=(await Notifications.getExpoPushTokenAsync({projectId})).data;
       const {error}=await supabase.from('kc_device_tokens').upsert({
@@ -535,7 +563,7 @@ function GuftinApp() {
     };
     void registerPreviouslyAllowedDevice().catch(error=>console.warn('Push registration check:',error?.message||error));
     return ()=>{mounted=false;};
-  },[session?.user?.id]);
+  },[session?.user?.id,pushPermissionReady]);
 
   const enablePushNotifications=async()=>{
     if(!session||pushBusy)return;
@@ -637,7 +665,18 @@ function GuftinApp() {
       setIncomingCall(null);
       setOutgoingCall(null);
     }catch(e:any){
-      Alert.alert('Call could not connect',e?.message||'LiveKit credentials are missing or the call is no longer active.');
+      let details=e?.message||'LiveKit credentials are missing or the call is no longer active.';
+      // Supabase FunctionsHttpError keeps the function's JSON response in context.
+      // Show the real server reason (e.g. missing LiveKit secrets) instead of the
+      // generic "non-2xx status code" message.
+      try{
+        const response=e?.context;
+        if(response&&typeof response.clone==='function'){
+          const body=await response.clone().json();
+          if(typeof body?.error==='string'&&body.error.trim())details=body.error;
+        }
+      }catch{ /* Fall back to the SDK message if the response has no JSON body. */ }
+      Alert.alert('Call could not connect',details);
       await supabase.from('kc_call_logs').update({status:'ended',ended_at:new Date().toISOString()}).eq('id',call.id);
       setIncomingCall(null);
       setOutgoingCall(null);
