@@ -25,13 +25,13 @@ Expo React Native app using Supabase Auth, Postgres, Realtime and RLS.
 
 ## Current limitations
 
-This release implements email/password auth, username profiles, username contact discovery, direct chats, group creation, message/media uploads, Realtime updates, status posts/reactions, and a LiveKit voice/video call flow. Voice/video calls still require a valid LiveKit server and the three private Edge Function secrets documented below. Background push still requires an Expo EAS project ID and Firebase FCM V1 credentials. Message encryption is an early implementation and has not had an independent security audit. Do not present the app as a finished WhatsApp replacement until the external services and device-to-device behavior are independently tested.
+This release implements email/password auth, username profiles, username contact discovery, direct chats, group creation, message/media uploads, Realtime updates, status posts/reactions, and direct LiveKit voice/video calls. New calls carry a random 32-byte media E2EE key, encrypted separately for each active conversation device with its registered X25519 public key. The LiveKit React Native E2EE manager enables room media encryption on both participants. Calls still require a valid LiveKit server and the three private Edge Function secrets documented below. Background push still requires an Expo EAS project ID and Firebase FCM V1 credentials. Message and call encryption have no verified safety numbers or forward secrecy and have not had an independent security audit. Do not present the app as a finished WhatsApp replacement until external services and two-device behavior are independently tested.
 
 
 ## Push notifications and gallery saving
 
 - On first launch, Guftin creates its notification channels and asks the OS for notification permission. After sign-in, it registers this device in `kc_device_tokens` when permission is granted. The Settings switch remains available to re-enable notifications.
-- Set the actual Expo EAS project ID as the GitHub Actions variable or secret `EXPO_PUBLIC_EAS_PROJECT_ID`. This value was empty in the previous APK build, so no Expo push token could be registered.
+- Set the actual Expo EAS project ID as the GitHub Actions variable or secret `EXPO_PUBLIC_EAS_PROJECT_ID`. This value was empty in previous builds, so the app could ask for OS permission but could not register Expo push tokens.
 - Add the Firebase Android configuration file as `apps/kingchat/google-services.json`. The Expo app config automatically includes it when present. Configure the Firebase Cloud Messaging (FCM) V1 service-account key in the linked Expo project's credentials before expecting Android push notifications when the app is in the background or closed.
 - The Supabase `guftin-push` Edge Function sends generic message/call notifications after a message/call is created. No message text is included in the notification payload.
 - Users can save individual photo/video messages to their gallery, or enable auto-save in Settings. Gallery access is requested by the OS when needed.
@@ -41,8 +41,11 @@ This release implements email/password auth, username profiles, username contact
 ## LiveKit voice/video calls
 
 - Direct voice/video calls use LiveKit rooms. The app requests a short-lived participant token from the `livekit-token` Supabase Edge Function only after the call is accepted.
-- In Supabase Dashboard → Edge Functions → Secrets, set `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` for the `oyjemlbsmffvofefgxvd` project. Use the server URL and credentials from your LiveKit project. Never put the API secret in the APK, app config, or GitHub source.
-- The previous call attempts returned HTTP 503 because those LiveKit secrets were not configured. Calls cannot connect until all three values are saved.
+- Each new call generates a fresh 32-byte random media key. The key is encrypted separately to every active E2EE device in the direct conversation and stored as ciphertext in `kc_call_logs.e2ee_key_envelopes`. Each device unwraps only its own copy; LiveKit receives the shared key only inside the installed clients.
+- LiveKit's React Native `useRNE2EEManager` applies media E2EE to the room. LiveKit signaling, room metadata and API requests remain TLS-protected rather than end-to-end encrypted. The current design has no safety-number verification or forward secrecy and is not independently audited.
+- In Supabase Dashboard → Edge Functions → Secrets, set `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` for the `oyjemlbsmffvofefgxvd` project. Use the server URL and credentials from the LiveKit project. Never put the API secret in the APK, app config, or GitHub source.
+- Previous call attempts returned HTTP 503 because those LiveKit secrets were not configured. Calls cannot connect until all three values are saved.
+- Calls created by older app versions have no E2EE call-key envelope; the new app refuses to join those calls rather than silently falling back to unencrypted media.
 
 
 ## AdMob (test mode by default)
