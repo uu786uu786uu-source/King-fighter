@@ -43,6 +43,10 @@ module.exports = ({ config }) => ({
     ...config.android,
     package: "com.guftin.app",
     versionCode: 14,
+    // Add the Firebase Android client config when the owner supplies it.
+    ...(fs.existsSync(path.join(__dirname, "google-services.json"))
+      ? { googleServicesFile: "./google-services.json" }
+      : {}),
     // Explicitly register the Supabase OAuth return URL on Android. The broad
     // scheme registration remains in place for other Guftin deep links.
     intentFilters: [
