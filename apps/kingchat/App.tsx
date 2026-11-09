@@ -652,14 +652,20 @@ function GuftinApp() {
   const testPushNotifications=async()=>{
     if(!session||pushBusy)return;
     setPushBusy(true);
+    let registered=false;
     try{
       await registerExpoPushToken(session.user.id);
+      registered=true;
+      setPushEnabled(true);
       const {data,error}=await supabase.functions.invoke('guftin-push',{body:{kind:'test'}});
       if(error)throw error;
-      if(!data?.sent)throw new Error(data?.reason||'The push service did not accept this test notification.');
+      if(!data?.sent){
+        const details=Array.isArray(data?.warnings)?data.warnings.join(', '):'';
+        throw new Error(details||data?.reason||'The push service did not accept this test notification.');
+      }
       Alert.alert('Test notification queued','Expo accepted the test push for this phone. Check the notification shade; delivery is still subject to Android and Firebase availability.');
     }catch(e:any){
-      setPushEnabled(false);
+      if(!registered)setPushEnabled(false);
       Alert.alert('Test notification failed',e?.message||'Check the Expo FCM V1 credentials and Android notification permission.');
     }finally{setPushBusy(false);}
   };
