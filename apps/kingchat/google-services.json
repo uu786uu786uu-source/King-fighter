@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "883170857371",
+    "project_id": "guftin",
+    "storage_bucket": "guftin.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:883170857371:android:1f60694da1864f6c60913e",
+        "android_client_info": {
+          "package_name": "com.guftin.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDrJlS4DC-7M_IL2_9CYGaKHL-kWRVpYk8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
