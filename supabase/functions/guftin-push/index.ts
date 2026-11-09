@@ -11,7 +11,7 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 });
 
 type PushBody = {
-  kind?: "message" | "call" | "status" | "status_like" | "status_view";
+  kind?: "test" | "message" | "call" | "status" | "status_like" | "status_view";
   message_id?: string;
   call_id?: string;
   status_id?: string;
@@ -48,7 +48,13 @@ Deno.serve(async (req: Request) => {
   let categoryId: string | undefined;
   let ttl = 60 * 60 * 24;
 
-  if (body.kind === "message" && body.message_id) {
+  if (body.kind === "test") {
+    recipientIds = [actor.id];
+    title = "Guftin notification test";
+    message = "Push notifications are connected to this phone.";
+    data = { type: "test" };
+    ttl = 60;
+  } else if (body.kind === "message" && body.message_id) {
     const { data: row, error } = await admin.from("kc_messages")
       .select("id,conversation_id,sender_id,message_type,deleted_at")
       .eq("id", body.message_id).maybeSingle();
@@ -85,7 +91,7 @@ Deno.serve(async (req: Request) => {
     };
     channelId = "calls";
     categoryId = "guftin_incoming_call";
-    ttl = 45;
+    ttl = 60;
   } else if (body.kind === "status" && body.status_id) {
     const { data: row, error } = await admin.from("kc_status_updates")
       .select("id,user_id,expires_at").eq("id", body.status_id).maybeSingle();
@@ -129,28 +135,40 @@ Deno.serve(async (req: Request) => {
     return json({ error: "kind and a valid message_id, call_id, or status_id are required." }, 400);
   }
 
-  recipientIds = [...new Set(recipientIds.filter((id) => id && id !== actor.id))];
+  recipientIds = [...new Set(recipientIds.filter((id) => id && (body.kind === "test" || id !== actor.id)))];
   if (!recipientIds.length) return json({ sent: 0, reason: "No recipients." });
 
   const { data: devices, error: tokenError } = await admin.from("kc_device_tokens")
-    .select("token").in("user_id", recipientIds);
+    .select("token,platform").in("user_id", recipientIds);
   if (tokenError) return json({ error: "Could not load recipient devices." }, 500);
 
-  const tokens = [...new Set((devices || []).map((item: any) => item.token)
-    .filter((token: string) => typeof token === "string" && token.startsWith("ExponentPushToken[")))];
-  if (!tokens.length) return json({ sent: 0, reason: "Recipients have not enabled push notifications on a device." });
+  const targets = [...new Map((devices || [])
+    .filter((item: any) => typeof item.token === "string" && item.token.startsWith("ExponentPushToken["))
+    .map((item: any) => [item.token, { token: item.token, platform: String(item.platform || "").toLowerCase() }])
+  ).values()];
+  if (!targets.length) return json({ sent: 0, reason: "Recipients have not enabled push notifications on a device." });
 
-  const notifications = tokens.map((to) => ({
-    to,
-    title,
-    body: message,
-    sound: "default",
-    priority: "high",
-    channelId,
-    ...(categoryId ? { categoryId } : {}),
-    ...(ttl ? { ttl } : {}),
-    data,
-  }));
+  const notifications = targets.map(({ token, platform }) => {
+    // Expo's Android headless task only runs for data-only notifications when
+    // the app is terminated. Let CallKeep create the native incoming-call UI.
+    const androidHeadlessCall = body.kind === "call" && platform === "android";
+    return {
+      to: token,
+      ...(androidHeadlessCall ? {} : {
+        title,
+        body: message,
+        sound: "default",
+        channelId,
+        ...(categoryId ? { categoryId } : {}),
+        ...(body.kind === "call" && typeof data.call_id === "string"
+          ? { tag: "guftin-call-" + data.call_id }
+          : {}),
+      }),
+      priority: "high",
+      ...(ttl ? { ttl } : {}),
+      data,
+    };
+  });
 
   let sent = 0;
   const deliveryErrors: string[] = [];
@@ -189,9 +207,17 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  const warnings = [...new Set(deliveryErrors)].slice(0, 5);
+  console.log("guftin-push-dispatch", JSON.stringify({
+    kind: body.kind,
+    recipient_count: recipientIds.length,
+    attempted: targets.length,
+    sent,
+    warnings,
+  }));
   return json({
     sent,
-    attempted: tokens.length,
-    ...(deliveryErrors.length ? { warnings: [...new Set(deliveryErrors)].slice(0, 5) } : {}),
+    attempted: targets.length,
+    ...(warnings.length ? { warnings } : {}),
   });
 });
