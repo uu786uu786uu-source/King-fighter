@@ -42,6 +42,7 @@ const ensureCallKeepReady=()=>{
           alertDescription:'Allow Guftin to show incoming calls and answer them from the phone call screen.',
           cancelButton:'Later',
           okButton:'Continue',
+          additionalPermissions:[],
           foregroundService:{
             channelId:'guftin-call-service',
             channelName:'Guftin active calls',
@@ -932,7 +933,7 @@ function GuftinApp() {
       if(error)throw error;
       if(!data?.server_url||!data?.participant_token)throw new Error(data?.error||'The LiveKit token endpoint is not ready.');
       setLiveCall({id:call.id,callType:callRecord.call_type,serverUrl:data.server_url,token:data.participant_token,e2eeKey});
-      if(Platform.OS==='android')void RNCallKeep.setCurrentCallActive(call.id).catch(()=>{});
+      if(Platform.OS==='android')RNCallKeep.setCurrentCallActive(call.id);
       setIncomingCall(null);
       setOutgoingCall(null);
     }catch(e:any){
@@ -1061,7 +1062,7 @@ function GuftinApp() {
           void joinCall(call);
         }
         if(['declined','ended','missed','cancelled'].includes(call.status)){
-          if(Platform.OS==='android')void RNCallKeep.endCall(call.id).catch(()=>{});
+          if(Platform.OS==='android')RNCallKeep.endCall(call.id);
           setIncomingCall((old:any)=>old?.id===call.id?null:old);
           setOutgoingCall((old:any)=>old?.id===call.id?null:old);
           setPendingCallAccept((old:any)=>old?.id===call.id?null:old);
@@ -1725,7 +1726,7 @@ function GuftinApp() {
 
   const endCall=async(callId:string,fromNative=false)=>{
     await supabase.from('kc_call_logs').update({status:'ended',ended_at:new Date().toISOString()}).eq('id',callId);
-    if(!fromNative&&Platform.OS==='android')void RNCallKeep.endCall(callId).catch(()=>{});
+    if(!fromNative&&Platform.OS==='android')RNCallKeep.endCall(callId);
     setLiveCall(null);
     setOutgoingCall(null);
     setIncomingCall(null);
