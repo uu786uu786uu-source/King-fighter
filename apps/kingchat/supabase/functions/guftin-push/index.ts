@@ -139,27 +139,36 @@ Deno.serve(async (req: Request) => {
   if (!recipientIds.length) return json({ sent: 0, reason: "No recipients." });
 
   const { data: devices, error: tokenError } = await admin.from("kc_device_tokens")
-    .select("token").in("user_id", recipientIds);
+    .select("token,platform").in("user_id", recipientIds);
   if (tokenError) return json({ error: "Could not load recipient devices." }, 500);
 
-  const tokens = [...new Set((devices || []).map((item: any) => item.token)
-    .filter((token: string) => typeof token === "string" && token.startsWith("ExponentPushToken[")))];
-  if (!tokens.length) return json({ sent: 0, reason: "Recipients have not enabled push notifications on a device." });
+  const targets = [...new Map((devices || [])
+    .filter((item: any) => typeof item.token === "string" && item.token.startsWith("ExponentPushToken["))
+    .map((item: any) => [item.token, { token: item.token, platform: String(item.platform || "").toLowerCase() }])
+  ).values()];
+  if (!targets.length) return json({ sent: 0, reason: "Recipients have not enabled push notifications on a device." });
 
-  const notifications = tokens.map((to) => ({
-    to,
-    title,
-    body: message,
-    sound: "default",
-    priority: "high",
-    channelId,
-    ...(categoryId ? { categoryId } : {}),
-    ...(body.kind === "call" && typeof data.call_id === "string"
-      ? { tag: "guftin-call-" + data.call_id }
-      : {}),
-    ...(ttl ? { ttl } : {}),
-    data,
-  }));
+  const notifications = targets.map(({ token, platform }) => {
+    // Expo's Android headless task only runs for data-only notifications when
+    // the app is terminated. Let CallKeep create the native incoming-call UI.
+    const androidHeadlessCall = body.kind === "call" && platform === "android";
+    return {
+      to: token,
+      ...(androidHeadlessCall ? {} : {
+        title,
+        body: message,
+        sound: "default",
+        channelId,
+        ...(categoryId ? { categoryId } : {}),
+        ...(body.kind === "call" && typeof data.call_id === "string"
+          ? { tag: "guftin-call-" + data.call_id }
+          : {}),
+      }),
+      priority: "high",
+      ...(ttl ? { ttl } : {}),
+      data,
+    };
+  });
 
   let sent = 0;
   const deliveryErrors: string[] = [];
@@ -202,13 +211,13 @@ Deno.serve(async (req: Request) => {
   console.log("guftin-push-dispatch", JSON.stringify({
     kind: body.kind,
     recipient_count: recipientIds.length,
-    attempted: tokens.length,
+    attempted: targets.length,
     sent,
     warnings,
   }));
   return json({
     sent,
-    attempted: tokens.length,
+    attempted: targets.length,
     ...(warnings.length ? { warnings } : {}),
   });
 });
