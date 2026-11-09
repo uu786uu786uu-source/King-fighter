@@ -1274,7 +1274,17 @@ function GuftinApp() {
           break;
         }
       }
-      await AsyncStorage.setItem(queueKey,JSON.stringify(remaining)).catch(()=>{});
+      // Preserve any messages appended while this batch was uploading.
+      let concurrentItems:any[]=[];
+      try{
+        const latestRaw=await AsyncStorage.getItem(queueKey);
+        const latest=latestRaw?JSON.parse(latestRaw):[];
+        if(Array.isArray(latest)){
+          const originalIds=new Set(queue.map((item:any)=>item.id));
+          concurrentItems=latest.filter((item:any)=>!originalIds.has(item.id));
+        }
+      }catch{}
+      await AsyncStorage.setItem(queueKey,JSON.stringify([...remaining,...concurrentItems])).catch(()=>{});
       if(remaining.length<queue.length)void loadInbox();
     }finally{
       flushingPendingMessages.current=false;
@@ -1421,7 +1431,17 @@ function GuftinApp() {
           outboundCipher?.fill(0);
         }
       }
-      await AsyncStorage.setItem(queueKey,JSON.stringify(remaining)).catch(()=>{});
+      // Preserve media added while this upload batch was running.
+      let concurrentItems:any[]=[];
+      try{
+        const latestRaw=await AsyncStorage.getItem(queueKey);
+        const latest=latestRaw?JSON.parse(latestRaw):[];
+        if(Array.isArray(latest)){
+          const originalIds=new Set(queue.map((item:any)=>item.id));
+          concurrentItems=latest.filter((item:any)=>!originalIds.has(item.id));
+        }
+      }catch{}
+      await AsyncStorage.setItem(queueKey,JSON.stringify([...remaining,...concurrentItems])).catch(()=>{});
       if(remaining.length<queue.length)void loadInbox();
     }finally{
       flushingPendingMedia.current=false;
