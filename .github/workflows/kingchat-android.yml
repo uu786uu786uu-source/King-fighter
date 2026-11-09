@@ -46,14 +46,10 @@ jobs:
           CI: 1
           EXPO_PUBLIC_EAS_PROJECT_ID: ${{ vars.EXPO_PUBLIC_EAS_PROJECT_ID || secrets.EXPO_PUBLIC_EAS_PROJECT_ID || '814cd723-8bea-4288-84b5-d489fdb37269' }}
         run: npx expo prebuild --platform android
-      - name: Increase Gradle distribution download timeout
-        run: |
-          WRAPPER_PROPERTIES="android/gradle/wrapper/gradle-wrapper.properties"
-          if ! grep -q '^networkTimeout=' "$WRAPPER_PROPERTIES"; then
-            printf '%s\\n' 'networkTimeout=120000' >> "$WRAPPER_PROPERTIES"
-          else
-            sed -i 's/^networkTimeout=.*/networkTimeout=120000/' "$WRAPPER_PROPERTIES"
-          fi
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -62,8 +58,7 @@ jobs:
       - name: Build release APK
         run: |
           cd android
-          chmod +x gradlew
-          ./gradlew assembleRelease
+          gradle --no-daemon assembleRelease
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
