@@ -86,13 +86,37 @@ Deno.serve(async (req: Request) => {
     return json({ error: "The call must be accepted before joining." }, 409);
   }
 
-  const livekitUrl = Deno.env.get("LIVEKIT_URL");
-  const apiKey = Deno.env.get("LIVEKIT_API_KEY");
-  const apiSecret = Deno.env.get("LIVEKIT_API_SECRET");
-  if (!livekitUrl || !apiKey || !apiSecret) {
+  // Read the three server-only LiveKit secrets. Never return their values.
+  const rawLivekitUrl = (Deno.env.get("LIVEKIT_URL") || "").trim();
+  const apiKey = (Deno.env.get("LIVEKIT_API_KEY") || "").trim();
+  const apiSecret = (Deno.env.get("LIVEKIT_API_SECRET") || "").trim();
+  const missing = [
+    !rawLivekitUrl ? "LIVEKIT_URL" : null,
+    !apiKey ? "LIVEKIT_API_KEY" : null,
+    !apiSecret ? "LIVEKIT_API_SECRET" : null,
+  ].filter(Boolean) as string[];
+  if (missing.length) {
     return json({
-      error: "LiveKit is not connected yet. Add LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET to Supabase Edge Function secrets.",
+      error: "LiveKit credentials are missing from Supabase Edge Function secrets.",
+      missing,
+      action: "Add the missing names under Project Settings > Edge Functions > Secrets. Save, then retry the call.",
     }, 503);
+  }
+
+  let livekitUrl: string;
+  try {
+    // LiveKit React Native expects a WebSocket URL. Accept https:// from the
+    // dashboard too, and normalize it to wss:// before returning it to clients.
+    const normalized = rawLivekitUrl.replace(/^https:\/\//i, "wss://").replace(/\/+$/, "");
+    const parsed = new URL(normalized);
+    if (parsed.protocol !== "wss:" || !parsed.host) {
+      return json({
+        error: "LIVEKIT_URL must be a valid LiveKit secure WebSocket URL (wss://...).",
+      }, 503);
+    }
+    livekitUrl = parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return json({ error: "LIVEKIT_URL is not a valid URL. Use the wss:// address from your LiveKit project." }, 503);
   }
 
   try {
