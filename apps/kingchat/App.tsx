@@ -877,7 +877,7 @@ function GuftinApp() {
     if(!pendingCallAccept||!session||!deviceIdentity||e2eeStatus!=='ready')return;
     const call=pendingCallAccept;
     setPendingCallAccept(null);
-    void acceptCallWhenReady(call);
+    void respondToCall(call,'accepted');
   },[pendingCallAccept,session,deviceIdentity,e2eeStatus,respondToCall]);
 
   useEffect(()=>{
@@ -958,6 +958,7 @@ function GuftinApp() {
         if(['declined','ended','missed','cancelled'].includes(call.status)){
           setIncomingCall((old:any)=>old?.id===call.id?null:old);
           setOutgoingCall((old:any)=>old?.id===call.id?null:old);
+          setPendingCallAccept((old:any)=>old?.id===call.id?null:old);
           setLiveCall((old:any)=>old?.id===call.id?null:old);
         }
       }).subscribe((status,error)=>{
@@ -989,7 +990,7 @@ function GuftinApp() {
       setIncomingCall(null);setOutgoingCall(null);setLiveCall(null);
       void supabase.from('kc_profiles').update({is_online:false,last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
     };
-  },[session,loadProfile,loadInbox,resolveMessage,joinCall,respondToCall,onlineVisibility,autoSync,syncIntervalSeconds,showReadReceipts,mediaAutoDownload]);
+  },[session,loadProfile,loadInbox,resolveMessage,joinCall,respondToCall,acceptCallWhenReady,onlineVisibility,autoSync,syncIntervalSeconds,showReadReceipts,mediaAutoDownload]);
 
   useEffect(()=>{
     let mounted=true;
