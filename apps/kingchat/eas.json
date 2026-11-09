@@ -12,7 +12,8 @@
       },
       "ios": {
         "simulator": true
-      }
+      },
+      "node": "22.23.3"
     },
     "preview": {
       "distribution": "internal",
@@ -21,14 +22,16 @@
       },
       "ios": {
         "simulator": false
-      }
+      },
+      "node": "22.23.3"
     },
     "production": {
       "autoIncrement": true,
       "android": {
         "buildType": "apk"
       },
-      "ios": {}
+      "ios": {},
+      "node": "22.23.3"
     }
   }
 }
