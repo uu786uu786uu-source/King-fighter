@@ -91,7 +91,7 @@ Deno.serve(async (req: Request) => {
     };
     channelId = "calls";
     categoryId = "guftin_incoming_call";
-    ttl = 45;
+    ttl = 60;
   } else if (body.kind === "status" && body.status_id) {
     const { data: row, error } = await admin.from("kc_status_updates")
       .select("id,user_id,expires_at").eq("id", body.status_id).maybeSingle();
@@ -154,6 +154,9 @@ Deno.serve(async (req: Request) => {
     priority: "high",
     channelId,
     ...(categoryId ? { categoryId } : {}),
+    ...(body.kind === "call" && typeof data.call_id === "string"
+      ? { tag: "guftin-call-" + data.call_id }
+      : {}),
     ...(ttl ? { ttl } : {}),
     data,
   }));
@@ -195,9 +198,17 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  const warnings = [...new Set(deliveryErrors)].slice(0, 5);
+  console.log("guftin-push-dispatch", JSON.stringify({
+    kind: body.kind,
+    recipient_count: recipientIds.length,
+    attempted: tokens.length,
+    sent,
+    warnings,
+  }));
   return json({
     sent,
     attempted: tokens.length,
-    ...(deliveryErrors.length ? { warnings: [...new Set(deliveryErrors)].slice(0, 5) } : {}),
+    ...(warnings.length ? { warnings } : {}),
   });
 });
