@@ -11,7 +11,7 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 });
 
 type PushBody = {
-  kind?: "message" | "call" | "status" | "status_like" | "status_view";
+  kind?: "test" | "message" | "call" | "status" | "status_like" | "status_view";
   message_id?: string;
   call_id?: string;
   status_id?: string;
@@ -48,7 +48,13 @@ Deno.serve(async (req: Request) => {
   let categoryId: string | undefined;
   let ttl = 60 * 60 * 24;
 
-  if (body.kind === "message" && body.message_id) {
+  if (body.kind === "test") {
+    recipientIds = [actor.id];
+    title = "Guftin notification test";
+    message = "Push notifications are connected to this phone.";
+    data = { type: "test" };
+    ttl = 60;
+  } else if (body.kind === "message" && body.message_id) {
     const { data: row, error } = await admin.from("kc_messages")
       .select("id,conversation_id,sender_id,message_type,deleted_at")
       .eq("id", body.message_id).maybeSingle();
@@ -129,7 +135,7 @@ Deno.serve(async (req: Request) => {
     return json({ error: "kind and a valid message_id, call_id, or status_id are required." }, 400);
   }
 
-  recipientIds = [...new Set(recipientIds.filter((id) => id && id !== actor.id))];
+  recipientIds = [...new Set(recipientIds.filter((id) => id && (body.kind === "test" || id !== actor.id)))];
   if (!recipientIds.length) return json({ sent: 0, reason: "No recipients." });
 
   const { data: devices, error: tokenError } = await admin.from("kc_device_tokens")
