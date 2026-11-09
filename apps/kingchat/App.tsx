@@ -239,6 +239,7 @@ function GuftinApp() {
   const [deviceIdentity,setDeviceIdentity]=useState<DeviceIdentity|null>(null);
   const [e2eeStatus,setE2eeStatus]=useState<'loading'|'ready'|'error'>('loading');
   const [incomingCall,setIncomingCall]=useState<any>(null);
+  const [pendingCallAccept,setPendingCallAccept]=useState<any>(null);
   const [outgoingCall,setOutgoingCall]=useState<any>(null);
   const [liveCall,setLiveCall]=useState<any>(null);
   const [callBusy,setCallBusy]=useState(false);
@@ -862,6 +863,23 @@ function GuftinApp() {
     else setOutgoingCall(null);
   },[session,joinCall]);
 
+  const acceptCallWhenReady=useCallback(async(call:any)=>{
+    if(!session||!call?.id)return;
+    if(!deviceIdentity||e2eeStatus!=='ready'){
+      setIncomingCall(call);
+      setPendingCallAccept(call);
+      return;
+    }
+    await respondToCall(call,'accepted');
+  },[session,deviceIdentity,e2eeStatus,respondToCall]);
+
+  useEffect(()=>{
+    if(!pendingCallAccept||!session||!deviceIdentity||e2eeStatus!=='ready')return;
+    const call=pendingCallAccept;
+    setPendingCallAccept(null);
+    void acceptCallWhenReady(call);
+  },[pendingCallAccept,session,deviceIdentity,e2eeStatus,respondToCall]);
+
   useEffect(()=>{
     if(!session){
       setLoading(false);setChats([]);setProfile(null);setProfileReady(false);setActive(null);return;
@@ -1049,7 +1067,7 @@ function GuftinApp() {
       if(response)handleNotificationResponse(response);
     });
     return ()=>subscription.remove();
-  },[session,respondToCall,loadInbox]);
+  },[session,respondToCall,acceptCallWhenReady,loadInbox]);
 
   const loadMessages=useCallback(async(conversationId:string)=>{
     if(!session) return;
