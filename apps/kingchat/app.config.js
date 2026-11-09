@@ -14,7 +14,8 @@ const svgIsNewer = !pngIsMissing &&
 if (pngIsMissing || svgIsNewer) {
   const generated = spawnSync(process.execPath, [path.join(__dirname, "scripts", "prepare-assets.js")], {
     cwd: __dirname,
-    stdio: "inherit"
+    // expo config must emit JSON only on stdout; asset progress belongs on stderr.
+    stdio: ["ignore", "ignore", "inherit"]
   });
   if (generated.status !== 0) {
     throw new Error("Guftin icon generation failed before Expo config resolution.");
