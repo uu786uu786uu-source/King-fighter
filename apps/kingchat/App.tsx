@@ -1208,10 +1208,8 @@ function GuftinApp() {
   const sendMessage=async()=>{
     const body=draft.trim();
     if(!body||!active||!session||sending)return;
-    if(!deviceIdentity||e2eeStatus!=='ready'){
-      Alert.alert('Secure chat is not ready','Guftin is still preparing this device encryption key. Keep the draft and try again when secure chat is ready.');
-      return;
-    }
+    // Text can be stored locally before the encryption roster is online.
+    // The background sender waits for the device key and network before delivery.
     const conversationId=active.id;
     setSending(true);
     try{
