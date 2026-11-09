@@ -80,6 +80,26 @@ const configureGuftinNotificationChannels=async()=>{
     {identifier:'decline_call',buttonTitle:'Decline',options:{opensAppToForeground:true,isDestructive:true}}
   ]);
 };
+const registerExpoPushToken = async (userId:string):Promise<string> => {
+  const permission = await Notifications.getPermissionsAsync();
+  if (!permission.granted) throw new Error("Allow Guftin notifications in Android settings first.");
+  const projectId = getExpoProjectId();
+  if (!projectId) throw new Error("This build is not linked to an Expo project. Rebuild after setting EXPO_PUBLIC_EAS_PROJECT_ID.");
+  await configureGuftinNotificationChannels();
+  const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+  if (!/^ExponentPushToken\\[[^\\]]+\\]$/.test(token)) {
+    throw new Error("Expo returned an invalid push token. Check this app's Firebase FCM V1 credentials in EAS.");
+  }
+  const { error } = await supabase.from("kc_device_tokens").upsert({
+    user_id: userId, token, platform: Platform.OS
+  }, { onConflict: "token" });
+  if (error) throw error;
+  const { data: saved, error: verifyError } = await supabase.from("kc_device_tokens")
+    .select("token").eq("user_id", userId).eq("token", token).maybeSingle();
+  if (verifyError) throw verifyError;
+  if (!saved?.token) throw new Error("Push token registration could not be confirmed in the server database.");
+  return token;
+};
 const initials = (s:string) => s.trim().split(/\s+/).slice(0,2).map(x=>x[0]||'').join('').toUpperCase() || 'KC';
 const colorFor = (s:string) => { let n=0; for(let i=0;i<s.length;i++) n=(n*31+s.charCodeAt(i))>>>0; return palette[n%palette.length]; };
 const timeLabel = (value:string) => {
@@ -584,26 +604,32 @@ function GuftinApp() {
 
   useEffect(()=>{
     let mounted=true;
+    let registering=false;
     const registerPreviouslyAllowedDevice=async()=>{
-      setPushEnabled(false);
-      if(!session||!pushPermissionReady)return;
-      const permission=await Notifications.getPermissionsAsync();
-      if(!permission.granted)return;
-      const projectId=getExpoProjectId();
-      if(!projectId){
-        console.warn('Push permission is granted, but EXPO_PUBLIC_EAS_PROJECT_ID is missing from this build.');
-        return;
+      if(!mounted||!session?.user?.id||!pushPermissionReady||registering)return;
+      registering=true;
+      try{
+        await registerExpoPushToken(session.user.id);
+        if(mounted)setPushEnabled(true);
+      }catch(error:any){
+        if(mounted)setPushEnabled(false);
+        console.warn('Push token registration:',error?.message||error);
+      }finally{
+        registering=false;
       }
-      await configureGuftinNotificationChannels();
-      const token=(await Notifications.getExpoPushTokenAsync({projectId})).data;
-      const {error}=await supabase.from('kc_device_tokens').upsert({
-        user_id:session.user.id,token,platform:Platform.OS
-      },{onConflict:'token'});
-      if(mounted)setPushEnabled(!error);
-      if(error)console.warn('Push token registration:',error.message);
     };
-    void registerPreviouslyAllowedDevice().catch(error=>console.warn('Push registration check:',error?.message||error));
-    return ()=>{mounted=false;};
+    void registerPreviouslyAllowedDevice();
+    const tokenSubscription=Notifications.addPushTokenListener(()=>{
+      void registerPreviouslyAllowedDevice();
+    });
+    const appStateSubscription=AppState.addEventListener('change',state=>{
+      if(state==='active')void registerPreviouslyAllowedDevice();
+    });
+    return ()=>{
+      mounted=false;
+      tokenSubscription.remove();
+      appStateSubscription.remove();
+    };
   },[session?.user?.id,pushPermissionReady]);
 
   const enablePushNotifications=async()=>{
@@ -614,20 +640,27 @@ function GuftinApp() {
       let permission=await Notifications.getPermissionsAsync();
       if(!permission.granted)permission=await Notifications.requestPermissionsAsync();
       if(!permission.granted)throw new Error('Notification permission was not granted.');
-      const projectId=getExpoProjectId();
-      if(!projectId){
-        throw new Error('Push notifications are not linked to an Expo project yet. Add EXPO_PUBLIC_EAS_PROJECT_ID to the Guftin Android build and configure FCM credentials before background delivery can be enabled.');
-      }
-      const token=(await Notifications.getExpoPushTokenAsync({projectId})).data;
-      const {error}=await supabase.from('kc_device_tokens').upsert({
-        user_id:session.user.id,token,platform:Platform.OS
-      },{onConflict:'token'});
-      if(error)throw error;
+      await registerExpoPushToken(session.user.id);
       setPushEnabled(true);
-      Alert.alert('Notifications enabled','This device is registered for Guftin message and call alerts. Delivery still depends on the platform push credentials.');
+      Alert.alert('Notifications enabled','This phone is registered with Guftin. Send a test notification to confirm delivery.');
     }catch(e:any){
       setPushEnabled(false);
-      Alert.alert('Notifications not enabled',e?.message||'Please check notification permissions and push credentials.');
+      Alert.alert('Notifications not enabled',e?.message||'Please check Android permission and Expo/Firebase FCM V1 credentials.');
+    }finally{setPushBusy(false);}
+  };
+
+  const testPushNotifications=async()=>{
+    if(!session||pushBusy)return;
+    setPushBusy(true);
+    try{
+      await registerExpoPushToken(session.user.id);
+      const {data,error}=await supabase.functions.invoke('guftin-push',{body:{kind:'test'}});
+      if(error)throw error;
+      if(!data?.sent)throw new Error(data?.reason||'The push service did not accept this test notification.');
+      Alert.alert('Test notification queued','Expo accepted the test push for this phone. Check the notification shade; delivery is still subject to Android and Firebase availability.');
+    }catch(e:any){
+      setPushEnabled(false);
+      Alert.alert('Test notification failed',e?.message||'Check the Expo FCM V1 credentials and Android notification permission.');
     }finally{setPushBusy(false);}
   };
 
@@ -638,7 +671,8 @@ function GuftinApp() {
       const projectId=getExpoProjectId();
       if(projectId){
         const token=(await Notifications.getExpoPushTokenAsync({projectId})).data;
-        await supabase.from('kc_device_tokens').delete().eq('user_id',session.user.id).eq('token',token);
+        const {error}=await supabase.from('kc_device_tokens').delete().eq('user_id',session.user.id).eq('token',token);
+        if(error)throw error;
       }
       setPushEnabled(false);
     }catch(e:any){Alert.alert('Could not turn notifications off',e?.message||'Please try again.');}
@@ -679,22 +713,13 @@ function GuftinApp() {
         granted=permission.granted;
         canAskAgain=permission.canAskAgain;
         if(granted){
-          const projectId=getExpoProjectId();
-          if(projectId){
-            try{
-              const token=(await Notifications.getExpoPushTokenAsync({projectId})).data;
-              const {error}=await supabase.from('kc_device_tokens').upsert({
-                user_id:session.user.id,token,platform:Platform.OS
-              },{onConflict:'token'});
-              if(error){setPushEnabled(false);setPermissionSetupNotice('Android permission is allowed, but this device token could not be registered with the push service.');}
-              else setPushEnabled(true);
-            }catch(error:any){
-              setPushEnabled(false);
-              setPermissionSetupNotice(error?.message||'Android permission is allowed. Expo/Firebase push registration still needs configuration.');
-            }
-          }else{
+          try{
+            await registerExpoPushToken(session.user.id);
+            setPushEnabled(true);
+            setPermissionSetupNotice('This phone is registered for push notifications. You can send a test notification from Settings.');
+          }catch(error:any){
             setPushEnabled(false);
-            setPermissionSetupNotice('Android permission is allowed. Background delivery still needs the Expo project ID and Firebase push credentials.');
+            setPermissionSetupNotice(error?.message||'Android permission is allowed, but Expo/Firebase push registration still needs configuration.');
           }
         }
       }else if(step.key==='microphone'){
@@ -2025,6 +2050,9 @@ function GuftinApp() {
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Show online status</Text><Text style={{color:C.muted,fontSize:11}}>Let contacts see when you are online</Text></View><Switch value={onlineVisibility} onValueChange={setOnlineVisibility} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Read receipts</Text><Text style={{color:C.muted,fontSize:11}}>Show seen status on messages</Text></View><Switch value={showReadReceipts} onValueChange={setShowReadReceipts} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Push notifications on this phone</Text><Text style={{color:C.muted,fontSize:11}}>Messages, status likes/views, and incoming call alerts with Accept/Decline</Text></View><Switch value={pushEnabled} disabled={pushBusy} onValueChange={enabled=>enabled?void enablePushNotifications():void disablePushNotifications()} trackColor={{true:C.green}}/></View>
+        <Btn disabled={pushBusy||!session} onPress={()=>void testPushNotifications()} style={{backgroundColor:C.mint,padding:12,borderRadius:13,marginTop:2,marginBottom:7,opacity:pushBusy?.55:1}}>
+          <Text style={{color:C.green,fontWeight:'900',textAlign:'center'}}>{pushBusy?'Checking notification service…':'Send test notification to this phone'}</Text>
+        </Btn>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Automatic message sync</Text><Text style={{color:C.muted,fontSize:11}}>Refresh while Guftin is open</Text></View><Switch value={autoSync} onValueChange={setAutoSync} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Auto-save incoming photos/videos</Text><Text style={{color:C.muted,fontSize:11}}>Save new media to your gallery automatically</Text></View><Switch value={mediaAutoDownload} onValueChange={setMediaAutoDownload} trackColor={{true:C.green}}/></View>
         <Text style={{color:C.ink,fontWeight:'800',marginTop:12}}>App theme</Text>
