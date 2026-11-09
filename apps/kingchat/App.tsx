@@ -1058,6 +1058,42 @@ function GuftinApp() {
       const cached=await AsyncStorage.getItem(messageCacheKey);
       if(cached){const parsed=JSON.parse(cached);if(Array.isArray(parsed))setMessages(prev=>({...prev,[conversationId]:parsed}));}
     }catch{ /* Ignore a damaged message cache and continue with the server request. */ }
+    // Rehydrate locally encrypted media that is still waiting for network access.
+    let pendingMediaItems:Message[]=[];
+    if(deviceIdentity){
+      try{
+        const queueRaw=await AsyncStorage.getItem('guftin-pending-media:'+session.user.id);
+        const queue=queueRaw?JSON.parse(queueRaw):[];
+        if(Array.isArray(queue)){
+          for(const pending of queue.filter((item:any)=>item.conversation_id===conversationId)){
+            try{
+              const encryptedFile=new File(pending.localFileUri);
+              if(!encryptedFile.exists)continue;
+              const cipher=new Uint8Array(await encryptedFile.arrayBuffer());
+              const opened=decryptMediaForDevice(cipher,pending.localBody,deviceIdentity);
+              cipher.fill(0);
+              const extension=(opened.fileName.split('.').pop()||'mp4').toLowerCase().replace(/[^a-z0-9]/g,'')||'mp4';
+              const previewFile=new File(Paths.cache,'guftin_media_'+pending.id+'.'+extension);
+              if(!previewFile.exists){previewFile.create();await previewFile.write(opened.bytes);}
+              opened.bytes.fill(0);
+              pendingMediaItems.push({
+                id:pending.localId,conversation_id:conversationId,sender_id:session.user.id,
+                body:pending.message_type==='video'?'Video':(pending.fileName||'Photo'),
+                message_type:pending.message_type,attachment_url:previewFile.uri,
+                created_at:pending.created_at,mine:true,pending:true
+              });
+            }catch(error:any){console.warn('Could not restore queued media preview:',error?.message||error);}
+          }
+        }
+      }catch(error:any){console.warn('Could not read queued media:',error?.message||error);}
+    }
+    if(pendingMediaItems.length){
+      setMessages(prev=>{
+        const current=prev[conversationId]||[];
+        const merged=[...current.filter(item=>!pendingMediaItems.some(pending=>pending.id===item.id)),...pendingMediaItems];
+        return {...prev,[conversationId]:merged.sort((a,b)=>new Date(a.created_at).getTime()-new Date(b.created_at).getTime())};
+      });
+    }
     const {data,error}=await supabase.from('kc_messages')
       .select('id,conversation_id,sender_id,body,message_type,attachment_url,created_at,deleted_at')
       .eq('conversation_id',conversationId)
@@ -1067,8 +1103,10 @@ function GuftinApp() {
     const hidden=new Set((hiddenRows||[]).map((row:any)=>row.message_id));
     const visibleRows=(data||[]).filter((message:any)=>!hidden.has(message.id));
     const resolved=await Promise.all(visibleRows.map((m:any)=>resolveMessage(m)));
-    setMessages(prev=>({...prev,[conversationId]:resolved}));
-    void AsyncStorage.setItem(messageCacheKey,JSON.stringify(resolved.map(item=>({...item,attachment_url:null})))).catch(()=>{});
+    const combined=[...resolved,...pendingMediaItems.filter(pending=>!resolved.some(item=>item.id===pending.id))]
+      .sort((a,b)=>new Date(a.created_at).getTime()-new Date(b.created_at).getTime());
+    setMessages(prev=>({...prev,[conversationId]:combined}));
+    void AsyncStorage.setItem(messageCacheKey,JSON.stringify(combined.map(item=>({...item,attachment_url:null})))).catch(()=>{});
     const ownMessageIds=visibleRows.filter((m:any)=>m.sender_id===session.user.id&&!m.deleted_at).map((m:any)=>m.id);
     const {data:memberList}=await supabase.from('kc_conversation_members').select('user_id,last_read_at').eq('conversation_id',conversationId);
     const peerMember=(memberList||[]).find((member:any)=>member.user_id!==session.user.id);
@@ -1089,7 +1127,7 @@ function GuftinApp() {
     const peer=(memberRows||[]).find((member:any)=>member.user_id!==session.user.id);
     setPeerLastReadAt(peer?.last_read_at||null);
     if(!readError)void loadInbox();
-  },[session,resolveMessage,loadInbox,showReadReceipts]);
+  },[session,deviceIdentity,resolveMessage,loadInbox,showReadReceipts]);
   loadMessagesRef.current=loadMessages;
 
   useEffect(()=>{
