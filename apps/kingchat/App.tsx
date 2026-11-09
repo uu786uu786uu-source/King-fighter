@@ -766,8 +766,10 @@ function GuftinApp() {
   const dispatchPush=async(kind:'message'|'call'|'status'|'status_like'|'status_view',id:string)=>{
     try{
       const payload=kind==='message'?{kind,message_id:id}:kind==='call'?{kind,call_id:id}:{kind,status_id:id};
-      const {error}=await supabase.functions.invoke('guftin-push',{body:payload});
+      const {data,error}=await supabase.functions.invoke('guftin-push',{body:payload});
       if(error)console.warn('Push dispatch:',error.message);
+      else if(kind==='call'&&(!data?.sent||data.sent<1))console.warn('Incoming call push was not queued:',data?.reason||data?.warnings||'No push ticket was accepted.');
+      else if(kind==='call')console.log('Incoming call push queued:',data.sent,'of',data.attempted);
     }catch(error:any){console.warn('Push dispatch unavailable:',error?.message||error);}
   };
 
