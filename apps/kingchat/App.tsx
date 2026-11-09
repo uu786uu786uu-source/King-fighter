@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import NetInfo from '@react-native-community/netinfo';
 import {
   ActivityIndicator, Alert, AppState, BackHandler, FlatList, Image, KeyboardAvoidingView, Modal,
   Platform, RefreshControl, ScrollView, StatusBar, Switch, Text, TextInput, ToastAndroid,
@@ -186,7 +187,7 @@ function AudioBubble({uri}:{uri:string}) {
 }
 function VideoBubble({uri}:{uri:string}) {
   const player=useVideoPlayer(uri);
-  return <VideoView player={player} style={{width:230,height:165,borderRadius:12}} nativeControls allowsFullscreen contentFit="contain"/>;
+  return <VideoView player={player} style={{width:260,height:210,borderRadius:12}} nativeControls allowsFullscreen contentFit="contain"/>;
 }
 
 function GuftinApp() {
@@ -204,6 +205,10 @@ function GuftinApp() {
   const activeConversationIdRef=useRef<string|null>(null);
   const loadMessagesRef=useRef<((id:string)=>Promise<void>)|null>(null);
   const flushPendingMessagesRef=useRef<(()=>Promise<void>)|null>(null);
+  const flushPendingMediaRef=useRef<(()=>Promise<void>)|null>(null);
+  const flushingPendingMessages=useRef(false);
+  const flushingPendingMedia=useRef(false);
+  const onlineRef=useRef(true);
   useEffect(()=>{
     activeConversationIdRef.current=active?.id||null;
   },[active?.id]);
@@ -213,6 +218,7 @@ function GuftinApp() {
   const [loading,setLoading]=useState(true);
   const [refreshing,setRefreshing]=useState(false);
   const [sending,setSending]=useState(false);
+  const [mediaPreparing,setMediaPreparing]=useState(false);
   const [statuses,setStatuses]=useState<any[]>([]);
   const [statusComposer,setStatusComposer]=useState(false);
   const [statusText,setStatusText]=useState('');
@@ -227,7 +233,7 @@ function GuftinApp() {
   const [mediaAutoDownload,setMediaAutoDownload]=useState(false);
   const [onlineVisibility,setOnlineVisibility]=useState(true);
   const [autoSync,setAutoSync]=useState(true);
-  const [syncIntervalSeconds,setSyncIntervalSeconds]=useState(4);
+  const [syncIntervalSeconds,setSyncIntervalSeconds]=useState(15);
   const [settingsLoaded,setSettingsLoaded]=useState(false);
   const [publishingStatus,setPublishingStatus]=useState(false);
   const [deviceIdentity,setDeviceIdentity]=useState<DeviceIdentity|null>(null);
@@ -299,7 +305,7 @@ function GuftinApp() {
           if(typeof saved.showReadReceipts==='boolean')setShowReadReceipts(saved.showReadReceipts);
           if(typeof saved.onlineVisibility==='boolean')setOnlineVisibility(saved.onlineVisibility);
           if(typeof saved.autoSync==='boolean')setAutoSync(saved.autoSync);
-          if([3,5,10].includes(saved.syncIntervalSeconds))setSyncIntervalSeconds(saved.syncIntervalSeconds);
+          if([15,30,60].includes(saved.syncIntervalSeconds))setSyncIntervalSeconds(saved.syncIntervalSeconds);
           if(typeof saved.mediaAutoDownload==='boolean')setMediaAutoDownload(saved.mediaAutoDownload);
           if(['emerald','ocean','violet','sunset','night'].includes(saved.themeName))setThemeName(saved.themeName);
         }catch{ /* Ignore an outdated or malformed local preferences record. */ }
@@ -871,6 +877,7 @@ function GuftinApp() {
         if(activeConversationIdRef.current)void loadMessagesRef.current?.(activeConversationIdRef.current);
         void loadProfile();
         void flushPendingMessagesRef.current?.();
+        void flushPendingMediaRef.current?.();
       }
     });
     const channel=supabase.channel('kingchat-user-'+session.user.id)
@@ -939,6 +946,7 @@ function GuftinApp() {
         if(status==='SUBSCRIBED'){
           console.log('Guftin realtime connected');
           void flushPendingMessagesRef.current?.();
+          void flushPendingMediaRef.current?.();
         }else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'||status==='CLOSED'){
           console.warn('Guftin realtime unavailable; automatic sync will use polling.',error?.message||status);
         }
@@ -953,8 +961,9 @@ function GuftinApp() {
           if(conversationId)void loadMessagesRef.current?.(conversationId);
         }
         void flushPendingMessagesRef.current?.();
+        void flushPendingMediaRef.current?.();
       }
-    },Math.max(3,syncIntervalSeconds)*1000);
+    },Math.max(15,syncIntervalSeconds)*1000);
     return ()=>{
       clearInterval(syncTimer);
       appState.remove();
@@ -963,6 +972,24 @@ function GuftinApp() {
       void supabase.from('kc_profiles').update({is_online:false,last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
     };
   },[session,loadProfile,loadInbox,resolveMessage,joinCall,respondToCall,onlineVisibility,autoSync,syncIntervalSeconds,showReadReceipts,mediaAutoDownload]);
+
+  useEffect(()=>{
+    let mounted=true;
+    const applyNetworkState=(state:any)=>{
+      const online=state?.isConnected===true&&state?.isInternetReachable!==false;
+      onlineRef.current=online;
+      if(online&&mounted){
+        void flushPendingMessagesRef.current?.();
+        void flushPendingMediaRef.current?.();
+      }
+    };
+    void NetInfo.fetch().then(applyNetworkState).catch(()=>{});
+    const unsubscribe=NetInfo.addEventListener(applyNetworkState);
+    return ()=>{
+      mounted=false;
+      unsubscribe();
+    };
+  },[]);
 
   useEffect(()=>{
     let mounted=true;
@@ -1097,124 +1124,254 @@ function GuftinApp() {
     const id=ExpoCrypto.randomUUID();
     const localId='pending:'+id;
     const queueKey='guftin-pending-messages:'+session.user.id;
-    const entry={id,localId,conversation_id:conversationId,text,created_at:new Date().toISOString()};
+    const createdAt=new Date().toISOString();
+    const entry={id,localId,conversation_id:conversationId,text,created_at:createdAt};
     let queue:any[]=[];
     try{const raw=await AsyncStorage.getItem(queueKey);queue=raw?JSON.parse(raw):[];if(!Array.isArray(queue))queue=[];}catch{queue=[];}
     queue.push(entry);
     await AsyncStorage.setItem(queueKey,JSON.stringify(queue));
-    const optimistic:Message={id:localId,conversation_id:conversationId,sender_id:session.user.id,body:text,message_type:'text',created_at:entry.created_at,mine:true,pending:true};
+    const optimistic:Message={id:localId,conversation_id:conversationId,sender_id:session.user.id,body:text,message_type:'text',created_at:createdAt,mine:true,pending:true};
     setMessages(prev=>({...prev,[conversationId]:[...(prev[conversationId]||[]).filter(item=>item.id!==localId),optimistic]}));
     setChats(prev=>{
-      const next=prev.map(chat=>chat.id===conversationId?{...chat,last:text,time:timeLabel(entry.created_at),lastAt:Date.now()}:chat);
+      const next=prev.map(chat=>chat.id===conversationId?{...chat,last:text,time:timeLabel(createdAt),lastAt:Date.now()}:chat);
       void AsyncStorage.setItem('guftin-cache-inbox:'+session.user.id,JSON.stringify(next)).catch(()=>{});
       return next;
     });
-    void AsyncStorage.setItem('guftin-cache-messages:'+session.user.id+':'+conversationId,JSON.stringify([...(messages[conversationId]||[]).filter(item=>item.id!==localId),optimistic].map(item=>({...item,attachment_url:null})))).catch(()=>{});
+    void AsyncStorage.setItem('guftin-cache-messages:'+session.user.id+':'+conversationId,
+      JSON.stringify([...(messages[conversationId]||[]).filter(item=>item.id!==localId),optimistic].map(item=>({...item,attachment_url:null})))).catch(()=>{});
     setDraft('');
   };
 
   const sendMessage=async()=>{
     const body=draft.trim();
-    if(!body||!active||!session||sending) return;
+    if(!body||!active||!session||sending)return;
     if(!deviceIdentity||e2eeStatus!=='ready'){
-      Alert.alert('Secure chat is not ready','Guftin is still setting up this device encryption key. Check your connection and reopen the app.');
+      Alert.alert('Secure chat is not ready','Guftin is still preparing this device encryption key. Keep the draft and try again when secure chat is ready.');
       return;
     }
-    setSending(true);
     const conversationId=active.id;
+    setSending(true);
     try{
-      const {data:members,error:membersError}=await supabase.from('kc_conversation_members')
-        .select('user_id').eq('conversation_id',conversationId);
-      if(membersError)throw membersError;
-      const memberIds=[...new Set((members||[]).map((row:any)=>row.user_id))] as string[];
-      if(!memberIds.includes(session.user.id))throw new Error('You are no longer a member of this conversation.');
-
-      const {data:devices,error:devicesError}=await supabase.from('kc_e2ee_devices')
-        .select('id,user_id,public_key').in('user_id',memberIds).is('revoked_at',null);
-      if(devicesError)throw devicesError;
-      const registeredUsers=new Set((devices||[]).map((device:any)=>device.user_id));
-      const missingUsers=memberIds.filter(id=>!registeredUsers.has(id));
-      if(missingUsers.length){
-        throw new Error('A conversation member has not registered an encryption device yet. Ask them to update and open Guftin before sending secure messages.');
-      }
-      const encryptedBody=encryptMessageForDevices(body,devices||[],deviceIdentity);
-      const {data,error}=await supabase.from('kc_messages').insert({
-        conversation_id:conversationId,sender_id:session.user.id,body:encryptedBody,message_type:'text'
-      }).select('id,conversation_id,sender_id,message_type,created_at').single();
-      if(error)throw error;
-      setDraft('');
-      void dispatchPush('message',data.id);
-      const item:Message={...data,body,mine:true};
-      setMessages(prev=>{
-        const old=prev[conversationId]||[];
-        return {...prev,[conversationId]:old.some(x=>x.id===item.id)?old:[...old,item]};
-      });
-      void loadInbox();
-    }catch(e:any){
-      if(isConnectivityFailure(e)){
-        try{await queueOfflineTextMessage(conversationId,body);}
-        catch(queueError:any){Alert.alert('Message could not be saved',queueError?.message||'This device could not store the pending message.');}
-      }else{
-        Alert.alert('Secure message not sent',e?.message||'Please try again.');
-      }
-    }finally{
+      // Save locally first. The composer clears as soon as the message is safely queued;
+      // server encryption, upload, and push delivery happen in the background.
+      await queueOfflineTextMessage(conversationId,body);
       setSending(false);
+      void flushPendingMessagesRef.current?.();
+    }catch(error:any){
+      setSending(false);
+      Alert.alert('Message could not be saved',error?.message||'Your draft is still available. Please try again.');
     }
   };
 
   const flushPendingMessages=useCallback(async()=>{
-    if(!session||!deviceIdentity||e2eeStatus!=='ready')return;
-    const queueKey='guftin-pending-messages:'+session.user.id;
-    let queue:any[]=[];
-    try{const raw=await AsyncStorage.getItem(queueKey);queue=raw?JSON.parse(raw):[];}catch{return;}
-    if(!Array.isArray(queue)||queue.length===0)return;
-    const remaining:any[]=[];
-    for(let index=0;index<queue.length;index++){
-      const pending=queue[index];
-      try{
-        const {data:members,error:membersError}=await supabase.from('kc_conversation_members')
-          .select('user_id').eq('conversation_id',pending.conversation_id);
-        if(membersError)throw membersError;
-        const memberIds=[...new Set((members||[]).map((row:any)=>row.user_id))] as string[];
-        if(!memberIds.includes(session.user.id))throw new Error('You are no longer a member of this conversation.');
-        const {data:devices,error:devicesError}=await supabase.from('kc_e2ee_devices')
-          .select('id,user_id,public_key').in('user_id',memberIds).is('revoked_at',null);
-        if(devicesError)throw devicesError;
-        const registeredUsers=new Set((devices||[]).map((device:any)=>device.user_id));
-        if(memberIds.some(id=>!registeredUsers.has(id)))throw new Error('A conversation member has not registered an encryption device yet.');
-        const encryptedBody=encryptMessageForDevices(pending.text,devices||[],deviceIdentity);
-        const inserted=await supabase.from('kc_messages').insert({
-          id:pending.id,conversation_id:pending.conversation_id,sender_id:session.user.id,
-          body:encryptedBody,message_type:'text'
-        }).select('id,conversation_id,sender_id,message_type,created_at').single();
-        let saved=inserted.data;
-        if(inserted.error){
-          if(inserted.error.code==='23505'){
-            const existing=await supabase.from('kc_messages')
-              .select('id,conversation_id,sender_id,message_type,created_at').eq('id',pending.id).maybeSingle();
-            if(existing.error||!existing.data)throw inserted.error;
-            saved=existing.data;
-          }else throw inserted.error;
+    if(!session||!deviceIdentity||e2eeStatus!=='ready'||!onlineRef.current||flushingPendingMessages.current)return;
+    flushingPendingMessages.current=true;
+    try{
+      const queueKey='guftin-pending-messages:'+session.user.id;
+      let queue:any[]=[];
+      try{const raw=await AsyncStorage.getItem(queueKey);queue=raw?JSON.parse(raw):[];}catch{return;}
+      if(!Array.isArray(queue)||queue.length===0)return;
+      const remaining:any[]=[];
+      for(let index=0;index<queue.length;index++){
+        const pending=queue[index];
+        try{
+          const {data:members,error:membersError}=await supabase.from('kc_conversation_members')
+            .select('user_id').eq('conversation_id',pending.conversation_id);
+          if(membersError)throw membersError;
+          const memberIds=[...new Set((members||[]).map((row:any)=>row.user_id))] as string[];
+          if(!memberIds.includes(session.user.id))throw new Error('You are no longer a member of this conversation.');
+          const {data:devices,error:devicesError}=await supabase.from('kc_e2ee_devices')
+            .select('id,user_id,public_key').in('user_id',memberIds).is('revoked_at',null);
+          if(devicesError)throw devicesError;
+          const registeredUsers=new Set((devices||[]).map((device:any)=>device.user_id));
+          if(memberIds.some(id=>!registeredUsers.has(id)))throw new Error('A conversation member has not registered a secure device yet.');
+          const encryptedBody=encryptMessageForDevices(pending.text,devices||[],deviceIdentity);
+          const inserted=await supabase.from('kc_messages').insert({
+            id:pending.id,conversation_id:pending.conversation_id,sender_id:session.user.id,
+            body:encryptedBody,message_type:'text'
+          }).select('id,conversation_id,sender_id,message_type,created_at').single();
+          let saved=inserted.data;
+          if(inserted.error){
+            if(inserted.error.code==='23505'){
+              const existing=await supabase.from('kc_messages')
+                .select('id,conversation_id,sender_id,message_type,created_at').eq('id',pending.id).maybeSingle();
+              if(existing.error||!existing.data)throw inserted.error;
+              saved=existing.data;
+            }else throw inserted.error;
+          }
+          if(!saved)throw new Error('The queued message was not confirmed by the server.');
+          const sentItem:Message={...saved,body:pending.text,mine:true,pending:false};
+          setMessages(prev=>({...prev,[pending.conversation_id]:[
+            ...(prev[pending.conversation_id]||[]).filter(item=>item.id!==pending.localId&&item.id!==pending.id),sentItem
+          ]}));
+          void dispatchPush('message',saved.id);
+        }catch(error:any){
+          remaining.push(...queue.slice(index));
+          if(!isConnectivityFailure(error))console.warn('Pending message remains queued:',error?.message||error);
+          break;
         }
-        if(!saved)throw new Error('The queued message was not confirmed by the server.');
-        const sentItem:Message={...saved,body:pending.text,mine:true,pending:false};
-        setMessages(prev=>({...prev,[pending.conversation_id]:[
-          ...(prev[pending.conversation_id]||[]).filter(item=>item.id!==pending.localId&&item.id!==pending.id),sentItem
-        ]}));
-        void dispatchPush('message',saved.id);
-      }catch(error:any){
-        remaining.push(...queue.slice(index));
-        if(!isConnectivityFailure(error))console.warn('Pending message remains queued:',error?.message||error);
-        break;
       }
+      await AsyncStorage.setItem(queueKey,JSON.stringify(remaining)).catch(()=>{});
+      if(remaining.length<queue.length)void loadInbox();
+    }finally{
+      flushingPendingMessages.current=false;
     }
-    await AsyncStorage.setItem(queueKey,JSON.stringify(remaining)).catch(()=>{});
-    if(remaining.length<queue.length)void loadInbox();
   },[session,deviceIdentity,e2eeStatus,loadInbox]);
   flushPendingMessagesRef.current=flushPendingMessages;
+
+  const queueOfflineMedia=async(conversationId:string,asset:any,messageType:'image'|'video',contentType:string,id:string,localId:string)=>{
+    if(!session||!deviceIdentity)throw new Error('Secure chat is not ready.');
+    const sourceFile=new File(asset.uri);
+    const plainBytes=new Uint8Array(await sourceFile.arrayBuffer());
+    const selfDevice={id:deviceIdentity.deviceId,user_id:session.user.id,public_key:deviceIdentity.publicKeyHex};
+    const localEncrypted=encryptMediaForDevices(
+      plainBytes,[selfDevice],deviceIdentity,contentType,
+      asset.fileName||('attachment.'+(messageType==='video'?'mp4':'jpg'))
+    );
+    plainBytes.fill(0);
+    const localPath=new File(Paths.document,'guftin-pending-'+id+'.enc');
+    if(localPath.exists)localPath.delete();
+    localPath.create();
+    await localPath.write(localEncrypted.ciphertext);
+    localEncrypted.ciphertext.fill(0);
+    const entry={
+      id,localId,conversation_id:conversationId,message_type:messageType,contentType,
+      fileName:asset.fileName||('attachment.'+(messageType==='video'?'mp4':'jpg')),
+      localBody:localEncrypted.body,localFileUri:localPath.uri,created_at:new Date().toISOString()
+    };
+    const queueKey='guftin-pending-media:'+session.user.id;
+    let queue:any[]=[];
+    try{const raw=await AsyncStorage.getItem(queueKey);queue=raw?JSON.parse(raw):[];if(!Array.isArray(queue))queue=[];}catch{queue=[];}
+    queue.push(entry);
+    await AsyncStorage.setItem(queueKey,JSON.stringify(queue));
+    void AsyncStorage.setItem('guftin-cache-messages:'+session.user.id+':'+conversationId,
+      JSON.stringify((messages[conversationId]||[]).map(item=>({...item,attachment_url:null})))).catch(()=>{});
+  };
+
+  const flushPendingMedia=useCallback(async()=>{
+    if(!session||!deviceIdentity||e2eeStatus!=='ready'||!onlineRef.current||flushingPendingMedia.current)return;
+    flushingPendingMedia.current=true;
+    try{
+      const queueKey='guftin-pending-media:'+session.user.id;
+      let queue:any[]=[];
+      try{const raw=await AsyncStorage.getItem(queueKey);queue=raw?JSON.parse(raw):[];}catch{return;}
+      if(!Array.isArray(queue)||queue.length===0)return;
+      const remaining:any[]=[];
+      for(let index=0;index<queue.length;index++){
+        const pending=queue[index];
+        let plainBytes:Uint8Array|undefined;
+        let outboundCipher:Uint8Array|undefined;
+        try{
+          let outboundBody=pending.outboundBody as string|undefined;
+          let outboundFileUri=pending.outboundFileUri as string|undefined;
+          let objectPath=pending.objectPath as string|undefined;
+          if(!outboundBody||!outboundFileUri||!objectPath){
+            const {data:members,error:membersError}=await supabase.from('kc_conversation_members')
+              .select('user_id').eq('conversation_id',pending.conversation_id);
+            if(membersError)throw membersError;
+            const memberIds=[...new Set((members||[]).map((row:any)=>row.user_id))] as string[];
+            if(!memberIds.includes(session.user.id))throw new Error('You are no longer a member of this conversation.');
+            const {data:devices,error:devicesError}=await supabase.from('kc_e2ee_devices')
+              .select('id,user_id,public_key').in('user_id',memberIds).is('revoked_at',null);
+            if(devicesError)throw devicesError;
+            const registeredUsers=new Set((devices||[]).map((device:any)=>device.user_id));
+            if(memberIds.some(id=>!registeredUsers.has(id)))throw new Error('A chat member has not registered a secure device yet.');
+            const encryptedLocal=new File(pending.localFileUri);
+            if(!encryptedLocal.exists)throw new Error('The saved offline media file is missing on this phone.');
+            const localCipher=new Uint8Array(await encryptedLocal.arrayBuffer());
+            const opened=decryptMediaForDevice(localCipher,pending.localBody,deviceIdentity);
+            localCipher.fill(0);
+            plainBytes=opened.bytes;
+            const outgoing=encryptMediaForDevices(plainBytes,devices||[],deviceIdentity,pending.contentType,pending.fileName);
+            outboundBody=outgoing.body;
+            objectPath=session.user.id+'/'+pending.conversation_id+'/queued_'+pending.id+'.enc';
+            const outboundFile=new File(Paths.document,'guftin-outbound-'+pending.id+'.enc');
+            if(outboundFile.exists)outboundFile.delete();
+            outboundFile.create();
+            await outboundFile.write(outgoing.ciphertext);
+            outboundFileUri=outboundFile.uri;
+            outgoing.ciphertext.fill(0);
+            pending.outboundBody=outboundBody;
+            pending.outboundFileUri=outboundFileUri;
+            pending.objectPath=objectPath;
+            queue[index]=pending;
+            await AsyncStorage.setItem(queueKey,JSON.stringify(queue));
+          }
+          const outboundFile=new File(outboundFileUri);
+          if(!outboundFile.exists)throw new Error('The encrypted upload file is missing on this phone.');
+          outboundCipher=new Uint8Array(await outboundFile.arrayBuffer());
+          const existing=await supabase.from('kc_messages')
+            .select('id,conversation_id,sender_id,message_type,attachment_url,created_at')
+            .eq('id',pending.id).maybeSingle();
+          if(existing.error)throw existing.error;
+          let saved=existing.data;
+          if(!saved){
+            const {data:signed}=await supabase.storage.from('chat-media').createSignedUrl(objectPath,60);
+            if(!signed?.signedUrl){
+              const {error:uploadError}=await supabase.storage.from('chat-media').upload(objectPath,outboundCipher,{
+                contentType:'application/octet-stream',cacheControl:'3600',upsert:false
+              });
+              if(uploadError&&String(uploadError.message||'').toLowerCase().includes('already exists')===false)throw uploadError;
+            }
+            const inserted=await supabase.from('kc_messages').insert({
+              id:pending.id,conversation_id:pending.conversation_id,sender_id:session.user.id,
+              body:outboundBody,message_type:pending.message_type,attachment_url:objectPath
+            }).select('id,conversation_id,sender_id,message_type,attachment_url,created_at').single();
+            saved=inserted.data;
+            if(inserted.error){
+              if(inserted.error.code==='23505'){
+                const duplicate=await supabase.from('kc_messages')
+                  .select('id,conversation_id,sender_id,message_type,attachment_url,created_at')
+                  .eq('id',pending.id).maybeSingle();
+                if(duplicate.error||!duplicate.data)throw inserted.error;
+                saved=duplicate.data;
+              }else throw inserted.error;
+            }
+          }
+          if(!saved)throw new Error('The media message was not confirmed by the server.');
+          const localEncrypted=new File(pending.localFileUri);
+          const localCipher=new Uint8Array(await localEncrypted.arrayBuffer());
+          const opened=decryptMediaForDevice(localCipher,pending.localBody,deviceIdentity);
+          localCipher.fill(0);
+          const safeExtension=(opened.fileName.split('.').pop()||'mp4').toLowerCase().replace(/[^a-z0-9]/g,'')||'mp4';
+          const previewFile=new File(Paths.cache,'guftin_media_'+pending.id+'.'+safeExtension);
+          if(previewFile.exists)previewFile.delete();
+          previewFile.create();
+          await previewFile.write(opened.bytes);
+          opened.bytes.fill(0);
+          const sentItem:Message={
+            ...saved,body:pending.message_type==='video'?'Video':(pending.fileName||'Photo'),
+            attachment_url:previewFile.uri,mine:true,pending:false
+          };
+          setMessages(prev=>({...prev,[pending.conversation_id]:[
+            ...(prev[pending.conversation_id]||[]).filter(item=>item.id!==pending.localId&&item.id!==pending.id),sentItem
+          ]}));
+          void dispatchPush('message',saved.id);
+          try{if(localEncrypted.exists)localEncrypted.delete();}catch{}
+          try{if(outboundFile.exists)outboundFile.delete();}catch{}
+        }catch(error:any){
+          remaining.push(...queue.slice(index));
+          if(!isConnectivityFailure(error))console.warn('Pending media remains queued:',error?.message||error);
+          break;
+        }finally{
+          plainBytes?.fill(0);
+          outboundCipher?.fill(0);
+        }
+      }
+      await AsyncStorage.setItem(queueKey,JSON.stringify(remaining)).catch(()=>{});
+      if(remaining.length<queue.length)void loadInbox();
+    }finally{
+      flushingPendingMedia.current=false;
+    }
+  },[session,deviceIdentity,e2eeStatus,loadInbox]);
+  flushPendingMediaRef.current=flushPendingMedia;
+
   useEffect(()=>{
-    if(session&&deviceIdentity&&e2eeStatus==='ready')void flushPendingMessages();
-  },[session?.user?.id,deviceIdentity?.deviceId,e2eeStatus,flushPendingMessages]);
+    if(session&&deviceIdentity&&e2eeStatus==='ready'){
+      void flushPendingMessages();
+      void flushPendingMedia();
+    }
+  },[session?.user?.id,deviceIdentity?.deviceId,e2eeStatus,flushPendingMessages,flushPendingMedia]);
 
   const uploadVoiceMessage=async(uri:string)=>{
     if(!active||!session||!deviceIdentity||e2eeStatus!=='ready')throw new Error('Secure chat is not ready.');
@@ -1255,17 +1412,14 @@ function GuftinApp() {
   };
 
   const sendMedia=async()=>{
-    if(!active||!session||sending)return;
+    if(!active||!session||mediaPreparing)return;
     if(!deviceIdentity||e2eeStatus!=='ready'){
       Alert.alert('Secure media is not ready','Guftin is still setting up this device encryption key.');
       return;
     }
     try{
       const result=await ImagePicker.launchImageLibraryAsync({
-        mediaTypes:['images','videos'],
-        allowsEditing:false,
-        quality:0.85,
-        videoMaxDuration:60
+        mediaTypes:['images','videos'],allowsEditing:false,quality:0.85,videoMaxDuration:60
       });
       if(result.canceled||!result.assets?.length)return;
       const asset=result.assets[0];
@@ -1281,48 +1435,35 @@ function GuftinApp() {
         Alert.alert('Unsupported format','Please choose a JPG, PNG, WEBP image or MP4 video.');
         return;
       }
-      setSending(true);
-      const {data:members,error:membersError}=await supabase.from('kc_conversation_members')
-        .select('user_id').eq('conversation_id',active.id);
-      if(membersError)throw membersError;
-      const memberIds=[...new Set((members||[]).map((row:any)=>row.user_id))] as string[];
-      const {data:devices,error:devicesError}=await supabase.from('kc_e2ee_devices')
-        .select('id,user_id,public_key').in('user_id',memberIds).is('revoked_at',null);
-      if(devicesError)throw devicesError;
-      const registeredUsers=new Set((devices||[]).map((device:any)=>device.user_id));
-      if(memberIds.some(id=>!registeredUsers.has(id))){
-        throw new Error('A conversation member must open the latest Guftin build before receiving encrypted media.');
-      }
-
-      const plainBytes=new Uint8Array(await file.arrayBuffer());
-      const encrypted=encryptMediaForDevices(
-        plainBytes,devices||[],deviceIdentity,contentType,asset.fileName||('attachment.'+(messageType==='video'?'mp4':'jpg'))
-      );
-      plainBytes.fill(0);
-      const objectPath=session.user.id+'/'+active.id+'/'+Date.now()+'_'+ExpoCrypto.randomUUID()+'.enc';
-      const {error:uploadError}=await supabase.storage.from('chat-media').upload(objectPath,encrypted.ciphertext,{
-        contentType:'application/octet-stream',cacheControl:'3600',upsert:false
+      const conversationId=active.id;
+      const id=ExpoCrypto.randomUUID();
+      const localId='pending:'+id;
+      const createdAt=new Date().toISOString();
+      const optimistic:Message={
+        id:localId,conversation_id:conversationId,sender_id:session.user.id,
+        body:messageType==='video'?(asset.fileName||'Video'):(asset.fileName||'Photo'),
+        message_type:messageType,attachment_url:asset.uri,created_at:createdAt,mine:true,pending:true
+      };
+      // Paint the media bubble immediately; encrypting and uploading are background work.
+      setMessages(prev=>({...prev,[conversationId]:[...(prev[conversationId]||[]),optimistic]}));
+      setChats(prev=>{
+        const next=prev.map(chat=>chat.id===conversationId?{...chat,last:messageType==='video'?'Video':'Photo',time:timeLabel(createdAt),lastAt:Date.now()}:chat);
+        void AsyncStorage.setItem('guftin-cache-inbox:'+session.user.id,JSON.stringify(next)).catch(()=>{});
+        return next;
       });
-      if(uploadError)throw uploadError;
-      const {data,error}=await supabase.from('kc_messages').insert({
-        conversation_id:active.id,sender_id:session.user.id,
-        body:encrypted.body,message_type:messageType,attachment_url:objectPath
-      }).select('id,conversation_id,sender_id,message_type,created_at').single();
-      if(error){
-        await supabase.storage.from('chat-media').remove([objectPath]);
-        throw error;
+      setMediaPreparing(true);
+      try{
+        await queueOfflineMedia(conversationId,asset,messageType,contentType,id,localId);
+        setMediaPreparing(false);
+        void flushPendingMediaRef.current?.();
+      }catch(queueError:any){
+        setMessages(prev=>({...prev,[conversationId]:(prev[conversationId]||[]).filter(item=>item.id!==localId)}));
+        setMediaPreparing(false);
+        Alert.alert('Media could not be saved',queueError?.message||'The media file could not be kept on this phone.');
       }
-      void dispatchPush('message',data.id);
-      const item:Message={...data,body:messageType==='video'?'Video':'Photo',attachment_url:asset.uri,mine:true};
-      setMessages(prev=>{
-        const old=prev[active.id]||[];
-        return {...prev,[active.id]:old.some(x=>x.id===item.id)?old:[...old,item]};
-      });
-      void loadInbox();
     }catch(e:any){
+      setMediaPreparing(false);
       Alert.alert('Encrypted media not sent',e?.message||'Please try another image or video.');
-    }finally{
-      setSending(false);
     }
   };
 
@@ -1840,7 +1981,7 @@ function GuftinApp() {
         </TouchableOpacity>}/>
       <KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':undefined}>
         <View style={{flexDirection:'row',alignItems:'center',padding:11,gap:8,backgroundColor:C.white}}>
-          <Btn disabled={sending} onPress={sendMedia} style={{width:42,height:42,borderRadius:15,backgroundColor:C.paper,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:23,color:C.green}}>＋</Text></Btn>
+          <Btn disabled={mediaPreparing} onPress={sendMedia} style={{width:42,height:42,borderRadius:15,backgroundColor:C.paper,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:23,color:C.green}}>＋</Text></Btn>
           <Btn disabled={sending||recordingBusy} onPress={recording?stopVoiceRecording:startVoiceRecording} style={{width:42,height:42,borderRadius:15,backgroundColor:recording?'#fde8e8':C.paper,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:18,color:recording?C.red:C.green}}>{recording?'■':'🎙'}</Text></Btn>
           <TextInput value={draft} onChangeText={setDraft} placeholder={recording?'Recording… tap ■ to send':'Write a message...'} multiline maxLength={4000} style={{flex:1,maxHeight:110,backgroundColor:C.paper,borderRadius:16,paddingHorizontal:15,paddingVertical:12,color:C.ink}}/>
           <Btn disabled={!draft.trim()||sending} onPress={sendMessage} style={{backgroundColor:C.green,width:46,height:46,borderRadius:16,alignItems:'center',justifyContent:'center'}}>
@@ -2066,7 +2207,7 @@ function GuftinApp() {
           {([['emerald','#087e6c','Emerald'],['ocean','#2476d2','Ocean'],['violet','#7950c8','Violet'],['sunset','#d45b42','Sunset'],['night','#101a2b','Night']] as any[]).map(([name,color,label])=><Btn key={name} onPress={()=>setThemeName(name)} style={{paddingHorizontal:13,paddingVertical:10,borderRadius:13,backgroundColor:color,borderWidth:themeName===name?3:0,borderColor:'#f2c75c'}}><Text style={{color:'#fff',fontWeight:'900',fontSize:11}}>{label}</Text></Btn>)}
         </View>
         <Text style={{fontSize:10,color:C.muted,marginTop:10}}>Gallery access is requested only when you save media or enable auto-save.</Text>
-        <Text style={{color:C.ink,fontWeight:'800',marginTop:10}}>Sync interval</Text><View style={{flexDirection:'row',gap:8,marginTop:10}}>{[3,5,10].map(seconds=><Btn key={seconds} onPress={()=>setSyncIntervalSeconds(seconds)} style={{flex:1,padding:12,borderRadius:12,backgroundColor:syncIntervalSeconds===seconds?C.green:C.paper,alignItems:'center'}}><Text style={{color:syncIntervalSeconds===seconds?'#fff':C.ink,fontWeight:'800'}}>{seconds}s</Text></Btn>)}</View>
+        <Text style={{color:C.ink,fontWeight:'800',marginTop:10}}>Sync interval</Text><View style={{flexDirection:'row',gap:8,marginTop:10}}>{[15,30,60].map(seconds=><Btn key={seconds} onPress={()=>setSyncIntervalSeconds(seconds)} style={{flex:1,padding:12,borderRadius:12,backgroundColor:syncIntervalSeconds===seconds?C.green:C.paper,alignItems:'center'}}><Text style={{color:syncIntervalSeconds===seconds?'#fff':C.ink,fontWeight:'800'}}>{seconds}s</Text></Btn>)}</View>
         <Btn onPress={()=>setSettingsOpen(false)} style={{backgroundColor:C.green,padding:15,borderRadius:14,alignItems:'center',marginTop:20}}><Text style={{color:'#fff',fontWeight:'900'}}>Done</Text></Btn>
       </View></View>
     </Modal>
