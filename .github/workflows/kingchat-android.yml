@@ -50,7 +50,7 @@ jobs:
         run: |
           WRAPPER_PROPERTIES="android/gradle/wrapper/gradle-wrapper.properties"
           if ! grep -q '^networkTimeout=' "$WRAPPER_PROPERTIES"; then
-            printf '\\nnetworkTimeout=120000\\n' >> "$WRAPPER_PROPERTIES"
+            printf '%s\\n' 'networkTimeout=120000' >> "$WRAPPER_PROPERTIES"
           else
             sed -i 's/^networkTimeout=.*/networkTimeout=120000/' "$WRAPPER_PROPERTIES"
           fi
