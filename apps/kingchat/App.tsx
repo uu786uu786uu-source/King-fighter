@@ -947,7 +947,7 @@ function GuftinApp() {
             'A Guftin contact is calling you.',
             [
               {text:'Decline',style:'cancel',onPress:()=>void respondToCall(call,'declined')},
-              {text:'Accept',onPress:()=>void respondToCall(call,'accepted')}
+              {text:'Accept',onPress:()=>void acceptCallWhenReady(call)}
             ],
             {cancelable:false}
           );
@@ -1035,7 +1035,7 @@ function GuftinApp() {
             if(call?.status!=='ringing')return;
             setTab('Calls');
             if(action==='accept_call'){
-              void respondToCall(call,'accepted');
+              void acceptCallWhenReady(call);
               return;
             }
             if(action==='decline_call'){
