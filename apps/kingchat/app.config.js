@@ -32,7 +32,7 @@ module.exports = ({ config }) => ({
     }
   },
   name: "Guftin",
-  slug: "guftin",
+  slug: "guftin-",
   version: "1.4.16",
   orientation: "portrait",
   userInterfaceStyle: "light",
