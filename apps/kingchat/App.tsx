@@ -87,7 +87,7 @@ const registerExpoPushToken = async (userId:string):Promise<string> => {
   if (!projectId) throw new Error("This build is not linked to an Expo project. Rebuild after setting EXPO_PUBLIC_EAS_PROJECT_ID.");
   await configureGuftinNotificationChannels();
   const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
-  if (!/^ExponentPushToken\\[[^\\]]+\\]$/.test(token)) {
+  if (!token.startsWith("ExponentPushToken[") || !token.endsWith("]")) {
     throw new Error("Expo returned an invalid push token. Check this app's Firebase FCM V1 credentials in EAS.");
   }
   const { error } = await supabase.from("kc_device_tokens").upsert({
@@ -2050,7 +2050,7 @@ function GuftinApp() {
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Show online status</Text><Text style={{color:C.muted,fontSize:11}}>Let contacts see when you are online</Text></View><Switch value={onlineVisibility} onValueChange={setOnlineVisibility} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Read receipts</Text><Text style={{color:C.muted,fontSize:11}}>Show seen status on messages</Text></View><Switch value={showReadReceipts} onValueChange={setShowReadReceipts} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Push notifications on this phone</Text><Text style={{color:C.muted,fontSize:11}}>Messages, status likes/views, and incoming call alerts with Accept/Decline</Text></View><Switch value={pushEnabled} disabled={pushBusy} onValueChange={enabled=>enabled?void enablePushNotifications():void disablePushNotifications()} trackColor={{true:C.green}}/></View>
-        <Btn disabled={pushBusy||!session} onPress={()=>void testPushNotifications()} style={{backgroundColor:C.mint,padding:12,borderRadius:13,marginTop:2,marginBottom:7,opacity:pushBusy?.55:1}}>
+        <Btn disabled={pushBusy||!session} onPress={()=>void testPushNotifications()} style={{backgroundColor:C.mint,padding:12,borderRadius:13,marginTop:2,marginBottom:7,opacity:pushBusy ? .55 : 1}}>
           <Text style={{color:C.green,fontWeight:'900',textAlign:'center'}}>{pushBusy?'Checking notification service…':'Send test notification to this phone'}</Text>
         </Btn>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Automatic message sync</Text><Text style={{color:C.muted,fontSize:11}}>Refresh while Guftin is open</Text></View><Switch value={autoSync} onValueChange={setAutoSync} trackColor={{true:C.green}}/></View>
