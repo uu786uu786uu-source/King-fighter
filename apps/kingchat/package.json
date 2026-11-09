@@ -39,7 +39,8 @@
     "expo-notifications": "~0.32.12",
     "expo-constants": "~18.0.13",
     "react-native-google-mobile-ads": "16.0.3",
-    "react-native-nitro-modules": "0.37.1"
+    "react-native-nitro-modules": "0.37.1",
+    "@react-native-community/netinfo": "11.4.1"
   },
   "devDependencies": {
     "@types/react": "~19.1.10",
