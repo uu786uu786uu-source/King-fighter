@@ -67,7 +67,10 @@ module.exports = ({ config }) => ({
       "android.permission.CAMERA",
       "android.permission.RECORD_AUDIO",
       "android.permission.VIBRATE",
-      "android.permission.POST_NOTIFICATIONS"
+      "android.permission.POST_NOTIFICATIONS",
+      "android.permission.USE_FULL_SCREEN_INTENT",
+      "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
+      "android.permission.FOREGROUND_SERVICE_MICROPHONE"
     ]
   },
   ios: {
@@ -102,6 +105,8 @@ module.exports = ({ config }) => ({
         enableBackgroundRemoteNotifications: true
       }
     ],
+    "@config-plugins/react-native-callkeep",
+    "./plugins/with-callkeep-android",
     [
       "./plugins/with-admob-app-ids",
       {
