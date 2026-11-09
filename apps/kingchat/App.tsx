@@ -588,7 +588,7 @@ function GuftinApp() {
         const encryptedBytes=new Uint8Array(await response.arrayBuffer());
         const decrypted=decryptMediaForDevice(encryptedBytes,body,deviceIdentity);
         const safeExtension=(decrypted.fileName.split('.').pop()||'bin').toLowerCase().replace(/[^a-z0-9]/g,'')||'bin';
-        const localFile=new File(Paths.cache,'kc_'+raw.id+'.'+safeExtension);
+        const localFile=new File(Paths.document,'kc_'+raw.id+'.'+safeExtension);
         if(localFile.exists)localFile.delete();
         localFile.create();
         await localFile.write(decrypted.bytes);
@@ -1054,9 +1054,10 @@ function GuftinApp() {
   const loadMessages=useCallback(async(conversationId:string)=>{
     if(!session) return;
     const messageCacheKey='guftin-cache-messages:'+session.user.id+':'+conversationId;
+    let cachedMessages:Message[]=[];
     try{
       const cached=await AsyncStorage.getItem(messageCacheKey);
-      if(cached){const parsed=JSON.parse(cached);if(Array.isArray(parsed))setMessages(prev=>({...prev,[conversationId]:parsed}));}
+      if(cached){const parsed=JSON.parse(cached);if(Array.isArray(parsed)){cachedMessages=parsed;setMessages(prev=>({...prev,[conversationId]:parsed}));}}
     }catch{ /* Ignore a damaged message cache and continue with the server request. */ }
     // Rehydrate locally encrypted media that is still waiting for network access.
     let pendingMediaItems:Message[]=[];
@@ -1073,7 +1074,7 @@ function GuftinApp() {
               const opened=decryptMediaForDevice(cipher,pending.localBody,deviceIdentity);
               cipher.fill(0);
               const extension=(opened.fileName.split('.').pop()||'mp4').toLowerCase().replace(/[^a-z0-9]/g,'')||'mp4';
-              const previewFile=new File(Paths.cache,'guftin_media_'+pending.id+'.'+extension);
+              const previewFile=new File(Paths.document,'guftin_media_'+pending.id+'.'+extension);
               if(!previewFile.exists){previewFile.create();await previewFile.write(opened.bytes);}
               opened.bytes.fill(0);
               pendingMediaItems.push({
@@ -1102,11 +1103,22 @@ function GuftinApp() {
     const {data:hiddenRows}=await supabase.from('kc_message_hidden').select('message_id').eq('user_id',session.user.id);
     const hidden=new Set((hiddenRows||[]).map((row:any)=>row.message_id));
     const visibleRows=(data||[]).filter((message:any)=>!hidden.has(message.id));
-    const resolved=await Promise.all(visibleRows.map((m:any)=>resolveMessage(m)));
+    const cachedById=new Map<string,Message>();
+    [...cachedMessages,...(messages[conversationId]||[])].forEach(item=>cachedById.set(item.id,item));
+    const resolved=await Promise.all(visibleRows.map(async(m:any)=>{
+      const cachedItem=cachedById.get(m.id);
+      if(cachedItem?.attachment_url){
+        try{
+          const localFile=new File(cachedItem.attachment_url);
+          if(cachedItem.attachment_url.startsWith('file://')&&localFile.exists)return cachedItem;
+        }catch{ /* Resolve from Supabase if the local media cache has expired. */ }
+      }
+      return resolveMessage(m);
+    }));
     const combined=[...resolved,...pendingMediaItems.filter(pending=>!resolved.some(item=>item.id===pending.id))]
       .sort((a,b)=>new Date(a.created_at).getTime()-new Date(b.created_at).getTime());
     setMessages(prev=>({...prev,[conversationId]:combined}));
-    void AsyncStorage.setItem(messageCacheKey,JSON.stringify(combined.map(item=>({...item,attachment_url:null})))).catch(()=>{});
+    void AsyncStorage.setItem(messageCacheKey,JSON.stringify(combined)).catch(()=>{});
     const ownMessageIds=visibleRows.filter((m:any)=>m.sender_id===session.user.id&&!m.deleted_at).map((m:any)=>m.id);
     const {data:memberList}=await supabase.from('kc_conversation_members').select('user_id,last_read_at').eq('conversation_id',conversationId);
     const peerMember=(memberList||[]).find((member:any)=>member.user_id!==session.user.id);
@@ -1176,7 +1188,7 @@ function GuftinApp() {
       return next;
     });
     void AsyncStorage.setItem('guftin-cache-messages:'+session.user.id+':'+conversationId,
-      JSON.stringify([...(messages[conversationId]||[]).filter(item=>item.id!==localId),optimistic].map(item=>({...item,attachment_url:null})))).catch(()=>{});
+      JSON.stringify([...(messages[conversationId]||[]).filter(item=>item.id!==localId),optimistic])).catch(()=>{});
     setDraft('');
   };
 
@@ -1283,7 +1295,7 @@ function GuftinApp() {
     queue.push(entry);
     await AsyncStorage.setItem(queueKey,JSON.stringify(queue));
     void AsyncStorage.setItem('guftin-cache-messages:'+session.user.id+':'+conversationId,
-      JSON.stringify((messages[conversationId]||[]).map(item=>({...item,attachment_url:null})))).catch(()=>{});
+      JSON.stringify(messages[conversationId]||[])).catch(()=>{});
   };
 
   const flushPendingMedia=useCallback(async()=>{
@@ -1372,7 +1384,7 @@ function GuftinApp() {
           const opened=decryptMediaForDevice(localCipher,pending.localBody,deviceIdentity);
           localCipher.fill(0);
           const safeExtension=(opened.fileName.split('.').pop()||'mp4').toLowerCase().replace(/[^a-z0-9]/g,'')||'mp4';
-          const previewFile=new File(Paths.cache,'guftin_media_'+pending.id+'.'+safeExtension);
+          const previewFile=new File(Paths.document,'guftin_media_'+pending.id+'.'+safeExtension);
           if(previewFile.exists)previewFile.delete();
           previewFile.create();
           await previewFile.write(opened.bytes);
