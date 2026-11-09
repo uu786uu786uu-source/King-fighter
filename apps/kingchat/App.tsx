@@ -15,6 +15,8 @@ import * as MediaLibrary from 'expo-media-library';
 import { Audio } from 'expo-av';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
+import * as TaskManager from 'expo-task-manager';
+import RNCallKeep from 'react-native-callkeep';
 import mobileAds, { BannerAd, BannerAdSize, MaxAdContentRating, TestIds } from 'react-native-google-mobile-ads';
 import { File, Paths } from 'expo-file-system';
 import { VideoView, useVideoPlayer } from 'expo-video';
@@ -26,6 +28,69 @@ import { Track } from 'livekit-client';
 WebBrowser.maybeCompleteAuthSession();
 registerGlobals();
 Notifications.setNotificationHandler({handleNotification:async()=>({shouldShowAlert:true,shouldPlaySound:true,shouldSetBadge:true,shouldShowBanner:true,shouldShowList:true})});
+
+const CALL_BACKGROUND_TASK = 'guftin-incoming-call-v1';
+const presentNativeIncomingCall = async (payload:any) => {
+  const callId = typeof payload?.call_id === 'string' ? payload.call_id :
+    typeof payload?.id === 'string' ? payload.id : '';
+  if (!callId || Platform.OS !== 'android') return;
+  const callerName = typeof payload?.caller_name === 'string' && payload.caller_name.trim()
+    ? payload.caller_name.trim() : 'Guftin contact';
+  const callType = payload?.call_type === 'video' ? 'video' : 'voice';
+  try {
+    await RNCallKeep.displayIncomingCall(
+      callId,
+      String(payload?.caller_id || callerName),
+      callerName,
+      'generic',
+      callType === 'video'
+    );
+  } catch (error:any) {
+    console.warn('Native incoming-call UI failed:', error?.message || error);
+    try {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: callType === 'video' ? 'Incoming video call' : 'Incoming voice call',
+          body: callerName + ' is calling you. Tap to answer.',
+          sound: 'default',
+          categoryIdentifier: 'guftin_incoming_call',
+          data: {
+            type: 'incoming_call',
+            call_id: callId,
+            call_type: callType,
+            caller_name: callerName
+          }
+        },
+        trigger: null
+      });
+    } catch (fallbackError:any) {
+      console.warn('Incoming-call notification fallback failed:', fallbackError?.message || fallbackError);
+    }
+  }
+};
+
+TaskManager.defineTask(CALL_BACKGROUND_TASK, async ({data,error}:any) => {
+  if (error) {
+    console.warn('Incoming-call background task failed:', error.message || error);
+    return;
+  }
+  try {
+    const taskData:any = data || {};
+    const embedded = taskData?.data?.dataString ??
+      taskData?.dataString ??
+      taskData?.notification?.request?.content?.data;
+    const payload = typeof embedded === 'string' ? JSON.parse(embedded) : embedded;
+    if (payload?.type === 'incoming_call' && typeof payload.call_id === 'string') {
+      await presentNativeIncomingCall(payload);
+    }
+  } catch (taskError:any) {
+    console.warn('Could not process incoming-call background payload:', taskError?.message || taskError);
+  }
+});
+void Notifications.registerTaskAsync(CALL_BACKGROUND_TASK).catch(error =>
+  console.warn('Could not register incoming-call background task:', error?.message || error)
+);
+
 
 let C:any = { ink:'#102b27', muted:'#82938e', green:'#087e6c', mint:'#e5f5ee', paper:'#f5f8f6', white:'#fff', line:'#e9efec', red:'#b94e48' };
 const THEMES:any = {
@@ -610,6 +675,33 @@ function GuftinApp() {
   },[session,deviceIdentity,getSignedMediaUrl]);
 
   useEffect(()=>{
+    if(!session?.user?.id || Platform.OS!=='android')return;
+    let mounted=true;
+    (async()=>{
+      try{
+        await RNCallKeep.setup({
+          ios:{appName:'Guftin'},
+          android:{
+            alertTitle:'Enable Guftin call screen',
+            alertDescription:'Allow Guftin to show incoming calls and answer them from the phone call screen.',
+            cancelButton:'Later',
+            okButton:'Continue',
+            foregroundService:{
+              channelId:'guftin-call-service',
+              channelName:'Guftin active calls',
+              notificationTitle:'Guftin call in progress'
+            }
+          }
+        });
+        if(mounted)await RNCallKeep.setAvailable(true);
+      }catch(error:any){
+        console.warn('Android call screen setup:',error?.message||error);
+      }
+    })();
+    return ()=>{mounted=false;};
+  },[session?.user?.id]);
+
+  useEffect(()=>{
     let mounted=true;
     let registering=false;
     const registerPreviouslyAllowedDevice=async()=>{
@@ -830,6 +922,7 @@ function GuftinApp() {
       if(error)throw error;
       if(!data?.server_url||!data?.participant_token)throw new Error(data?.error||'The LiveKit token endpoint is not ready.');
       setLiveCall({id:call.id,callType:callRecord.call_type,serverUrl:data.server_url,token:data.participant_token,e2eeKey});
+      if(Platform.OS==='android')void RNCallKeep.setCurrentCallActive(call.id).catch(()=>{});
       setIncomingCall(null);
       setOutgoingCall(null);
     }catch(e:any){
@@ -947,20 +1040,18 @@ function GuftinApp() {
         if(!call?.id)return;
         if(call.callee_id===session.user.id&&call.status==='ringing'){
           setIncomingCall(call);
-          Alert.alert(
-            call.call_type==='video'?'Incoming video call':'Incoming voice call',
-            'A Guftin contact is calling you.',
-            [
-              {text:'Decline',style:'cancel',onPress:()=>void respondToCall(call,'declined')},
-              {text:'Accept',onPress:()=>void acceptCallWhenReady(call)}
-            ],
-            {cancelable:false}
-          );
+          void presentNativeIncomingCall({
+            call_id:call.id,
+            caller_id:call.caller_id,
+            caller_name:'Guftin contact',
+            call_type:call.call_type
+          });
         }
         if(call.caller_id===session.user.id&&call.status==='accepted'){
           void joinCall(call);
         }
         if(['declined','ended','missed','cancelled'].includes(call.status)){
+          if(Platform.OS==='android')void RNCallKeep.endCall(call.id).catch(()=>{});
           setIncomingCall((old:any)=>old?.id===call.id?null:old);
           setOutgoingCall((old:any)=>old?.id===call.id?null:old);
           setPendingCallAccept((old:any)=>old?.id===call.id?null:old);
@@ -1622,12 +1713,86 @@ function GuftinApp() {
     }
   };
 
-  const endCall=async(callId:string)=>{
+  const endCall=async(callId:string,fromNative=false)=>{
     await supabase.from('kc_call_logs').update({status:'ended',ended_at:new Date().toISOString()}).eq('id',callId);
+    if(!fromNative&&Platform.OS==='android')void RNCallKeep.endCall(callId).catch(()=>{});
     setLiveCall(null);
     setOutgoingCall(null);
     setIncomingCall(null);
   };
+
+  const pendingNativeCallActions=useRef<Array<{callUUID:string;action:'answer'|'end'}>>([]);
+  const processedNativeCallActions=useRef<Set<string>>(new Set());
+  const handleNativeCallAction=useCallback(async(callUUID:string,action:'answer'|'end')=>{
+    if(!callUUID)return;
+    if(!session?.user?.id){
+      pendingNativeCallActions.current.push({callUUID,action});
+      return;
+    }
+    const actionKey=callUUID+':'+action;
+    if(processedNativeCallActions.current.has(actionKey))return;
+    processedNativeCallActions.current.add(actionKey);
+    try{
+      const {data:call,error}=await supabase.from('kc_call_logs')
+        .select('id,conversation_id,caller_id,callee_id,call_type,status')
+        .eq('id',callUUID).maybeSingle();
+      if(error)throw error;
+      if(!call|| (call.caller_id!==session.user.id&&call.callee_id!==session.user.id))return;
+      if(action==='answer'){
+        if(call.callee_id===session.user.id&&call.status==='ringing'){
+          setTab('Calls');
+          await acceptCallWhenReady(call);
+        }else if(call.status==='accepted'){
+          setTab('Calls');
+          if(!liveCall)void joinCall(call);
+        }
+      }else if(call.status==='ringing'&&call.callee_id===session.user.id){
+        await respondToCall(call,'declined');
+      }else if(call.status==='ringing'&&call.caller_id===session.user.id){
+        await supabase.from('kc_call_logs').update({status:'cancelled',ended_at:new Date().toISOString()}).eq('id',call.id);
+        setOutgoingCall(null);
+      }else if(call.status==='accepted'){
+        await endCall(call.id,true);
+      }
+    }catch(error:any){
+      console.warn('Native call action failed:',error?.message||error);
+    }
+  },[session,acceptCallWhenReady,respondToCall,joinCall,liveCall]);
+
+  const nativeCallActionHandlerRef=useRef<any>(null);
+  nativeCallActionHandlerRef.current=handleNativeCallAction;
+
+  useEffect(()=>{
+    if(Platform.OS!=='android')return;
+    const answerSub=RNCallKeep.addEventListener('answerCall',({callUUID}:any)=>{
+      void nativeCallActionHandlerRef.current?.(callUUID,'answer');
+    });
+    const endSub=RNCallKeep.addEventListener('endCall',({callUUID}:any)=>{
+      void nativeCallActionHandlerRef.current?.(callUUID,'end');
+    });
+    return ()=>{
+      answerSub.remove();
+      endSub.remove();
+    };
+  },[]);
+
+  useEffect(()=>{
+    if(!session?.user?.id||Platform.OS!=='android')return;
+    const queued=pendingNativeCallActions.current.splice(0);
+    for(const action of queued)void handleNativeCallAction(action.callUUID,action.action);
+    void RNCallKeep.getInitialEvents().then((events:any[])=>{
+      for(const event of events||[]){
+        const uuid=event?.data?.callUUID;
+        if(!uuid)continue;
+        if(String(event.name||'').toLowerCase().includes('answer')){
+          void handleNativeCallAction(uuid,'answer');
+        }else if(String(event.name||'').toLowerCase().includes('end')){
+          void handleNativeCallAction(uuid,'end');
+        }
+      }
+      RNCallKeep.clearInitialEvents();
+    }).catch(error=>console.warn('Could not restore native call actions:',error?.message||error));
+  },[session?.user?.id,handleNativeCallAction]);
 
   const chooseProfilePhoto=async()=>{
     const permission=await ImagePicker.requestMediaLibraryPermissionsAsync();
