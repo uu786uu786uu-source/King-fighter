@@ -1059,6 +1059,18 @@ function GuftinApp() {
       const cached=await AsyncStorage.getItem(messageCacheKey);
       if(cached){const parsed=JSON.parse(cached);if(Array.isArray(parsed)){cachedMessages=parsed;setMessages(prev=>({...prev,[conversationId]:parsed}));}}
     }catch{ /* Ignore a damaged message cache and continue with the server request. */ }
+    // Restore text messages waiting for delivery, even if the app was restarted.
+    let pendingTextItems:Message[]=[];
+    try{
+      const queueRaw=await AsyncStorage.getItem('guftin-pending-messages:'+session.user.id);
+      const queue=queueRaw?JSON.parse(queueRaw):[];
+      if(Array.isArray(queue)){
+        pendingTextItems=queue.filter((item:any)=>item.conversation_id===conversationId).map((item:any)=>({
+          id:item.localId,conversation_id:conversationId,sender_id:session.user.id,
+          body:item.text,message_type:'text',created_at:item.created_at,mine:true,pending:true
+        }));
+      }
+    }catch(error:any){console.warn('Could not restore queued text messages:',error?.message||error);}
     // Rehydrate locally encrypted media that is still waiting for network access.
     let pendingMediaItems:Message[]=[];
     if(deviceIdentity){
@@ -1088,10 +1100,11 @@ function GuftinApp() {
         }
       }catch(error:any){console.warn('Could not read queued media:',error?.message||error);}
     }
-    if(pendingMediaItems.length){
+    const offlinePendingItems=[...pendingTextItems,...pendingMediaItems];
+    if(offlinePendingItems.length){
       setMessages(prev=>{
         const current=prev[conversationId]||[];
-        const merged=[...current.filter(item=>!pendingMediaItems.some(pending=>pending.id===item.id)),...pendingMediaItems];
+        const merged=[...current.filter(item=>!offlinePendingItems.some(pending=>pending.id===item.id)),...offlinePendingItems];
         return {...prev,[conversationId]:merged.sort((a,b)=>new Date(a.created_at).getTime()-new Date(b.created_at).getTime())};
       });
     }
@@ -1115,7 +1128,7 @@ function GuftinApp() {
       }
       return resolveMessage(m);
     }));
-    const combined=[...resolved,...pendingMediaItems.filter(pending=>!resolved.some(item=>item.id===pending.id))]
+    const combined=[...resolved,...offlinePendingItems.filter(pending=>!resolved.some(item=>item.id===pending.id))]
       .sort((a,b)=>new Date(a.created_at).getTime()-new Date(b.created_at).getTime());
     setMessages(prev=>({...prev,[conversationId]:combined}));
     void AsyncStorage.setItem(messageCacheKey,JSON.stringify(combined)).catch(()=>{});
