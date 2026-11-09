@@ -842,6 +842,9 @@ function GuftinApp() {
         if(response&&typeof response.clone==='function'){
           const body=await response.clone().json();
           if(typeof body?.error==='string'&&body.error.trim())details=body.error;
+          if(Array.isArray(body?.missing)&&body.missing.length){
+            details+=' Missing secrets: '+body.missing.filter((name:any)=>typeof name==='string').join(', ')+'.';
+          }
         }
       }catch{ /* Fall back to the SDK message if the response has no JSON body. */ }
       Alert.alert('Call could not connect',details);
