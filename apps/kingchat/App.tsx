@@ -30,6 +30,33 @@ registerGlobals();
 Notifications.setNotificationHandler({handleNotification:async()=>({shouldShowAlert:true,shouldPlaySound:true,shouldSetBadge:true,shouldShowBanner:true,shouldShowList:true})});
 
 const CALL_BACKGROUND_TASK = 'guftin-incoming-call-v1';
+let callKeepSetupPromise:Promise<void>|null=null;
+const ensureCallKeepReady=()=>{
+  if(Platform.OS!=='android')return Promise.resolve();
+  if(!callKeepSetupPromise){
+    callKeepSetupPromise=(async()=>{
+      await RNCallKeep.setup({
+        ios:{appName:'Guftin'},
+        android:{
+          alertTitle:'Enable Guftin call screen',
+          alertDescription:'Allow Guftin to show incoming calls and answer them from the phone call screen.',
+          cancelButton:'Later',
+          okButton:'Continue',
+          foregroundService:{
+            channelId:'guftin-call-service',
+            channelName:'Guftin active calls',
+            notificationTitle:'Guftin call in progress'
+          }
+        }
+      });
+      await RNCallKeep.setAvailable(true);
+    })().catch(error=>{
+      callKeepSetupPromise=null;
+      throw error;
+    });
+  }
+  return callKeepSetupPromise;
+};
 const presentNativeIncomingCall = async (payload:any) => {
   const callId = typeof payload?.call_id === 'string' ? payload.call_id :
     typeof payload?.id === 'string' ? payload.id : '';
@@ -38,6 +65,7 @@ const presentNativeIncomingCall = async (payload:any) => {
     ? payload.caller_name.trim() : 'Guftin contact';
   const callType = payload?.call_type === 'video' ? 'video' : 'voice';
   try {
+    await ensureCallKeepReady();
     await RNCallKeep.displayIncomingCall(
       callId,
       String(payload?.caller_id || callerName),
@@ -677,27 +705,9 @@ function GuftinApp() {
   useEffect(()=>{
     if(!session?.user?.id || Platform.OS!=='android')return;
     let mounted=true;
-    (async()=>{
-      try{
-        await RNCallKeep.setup({
-          ios:{appName:'Guftin'},
-          android:{
-            alertTitle:'Enable Guftin call screen',
-            alertDescription:'Allow Guftin to show incoming calls and answer them from the phone call screen.',
-            cancelButton:'Later',
-            okButton:'Continue',
-            foregroundService:{
-              channelId:'guftin-call-service',
-              channelName:'Guftin active calls',
-              notificationTitle:'Guftin call in progress'
-            }
-          }
-        });
-        if(mounted)await RNCallKeep.setAvailable(true);
-      }catch(error:any){
-        console.warn('Android call screen setup:',error?.message||error);
-      }
-    })();
+    void ensureCallKeepReady().catch((error:any)=>{
+      if(mounted)console.warn('Android call screen setup:',error?.message||error);
+    });
     return ()=>{mounted=false;};
   },[session?.user?.id]);
 
