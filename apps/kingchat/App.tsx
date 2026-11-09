@@ -1048,7 +1048,7 @@ function GuftinApp() {
               'A Guftin contact is calling you.',
               [
                 {text:'Decline',style:'cancel',onPress:()=>void respondToCall(call,'declined')},
-                {text:'Accept',onPress:()=>void respondToCall(call,'accepted')}
+                {text:'Accept',onPress:()=>void acceptCallWhenReady(call)}
               ],
               {cancelable:false}
             );
