@@ -87,7 +87,14 @@ Deno.serve(async (req: Request) => {
         .eq("role", "invitee")
         .in("status", ["invited", "ringing"]);
       if (participantsError) return json({ error: "Could not load group-call recipients." }, 500);
-      recipientIds = (participants || []).map((item: any) => item.user_id).filter((id: string) => id && id !== actor.id);
+      const invitedIds = (participants || []).map((item: any) => item.user_id).filter((id: string) => id && id !== actor.id);
+      const { data: currentMembers, error: membershipError } = invitedIds.length
+        ? await admin.from("kc_conversation_members").select("user_id")
+            .eq("conversation_id", row.conversation_id).in("user_id", invitedIds)
+        : { data: [], error: null };
+      if (membershipError) return json({ error: "Could not validate current group members." }, 500);
+      const currentMemberIds = new Set((currentMembers || []).map((item: any) => item.user_id));
+      recipientIds = invitedIds.filter((id: string) => currentMemberIds.has(id));
       title = row.call_type === "video" ? "Incoming group video call" : "Incoming group voice call";
       message = actorName + " started a group call. Tap Accept to join.";
     } else {
