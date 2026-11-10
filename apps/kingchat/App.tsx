@@ -70,9 +70,8 @@ const presentNativeIncomingCall = async (payload:any) => {
   const callType = payload?.call_type === 'video' ? 'video' : 'voice';
   const isGroupCall = payload?.call_scope === 'group';
   try {
-    // The foreground app renders its own full-screen call surface. When it is
-    // backgrounded or headless, hand the incoming call to Android Telecom.
-    if (AppState.currentState === 'active') return;
+    // Use Android Telecom in every app state so native ringtone, lock-screen
+    // call UI, and system Answer/Decline controls stay consistent.
     await ensureCallKeepReady();
     const phoneAccountEnabled = await RNCallKeep.hasPhoneAccount();
     if (!phoneAccountEnabled) throw new Error('Guftin calling account is not enabled in Android Phone accounts.');
