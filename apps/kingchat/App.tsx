@@ -1145,13 +1145,18 @@ function GuftinApp() {
       .on('postgres_changes',{event:'*',schema:'public',table:'kc_call_logs'},payload=>{
         const call=(payload.new||payload.old) as any;
         if(!call?.id)return;
-        if(call.callee_id===session.user.id&&call.status==='ringing'){
+        const groupCall=(call.call_scope||'direct')==='group';
+        const incoming=groupCall
+          ?call.caller_id!==session.user.id&&call.status==='ringing'
+          :call.callee_id===session.user.id&&call.status==='ringing';
+        if(incoming){
           setIncomingCall(call);
           void presentNativeIncomingCall({
             call_id:call.id,
             caller_id:call.caller_id,
             caller_name:'Guftin contact',
-            call_type:call.call_type
+            call_type:call.call_type,
+            call_scope:call.call_scope||'direct'
           });
         }
         if(call.caller_id===session.user.id&&call.status==='accepted'){
@@ -1870,21 +1875,36 @@ function GuftinApp() {
     processedNativeCallActions.current.add(actionKey);
     try{
       const {data:call,error}=await supabase.from('kc_call_logs')
-        .select('id,conversation_id,caller_id,callee_id,call_type,status')
+        .select('id,conversation_id,caller_id,callee_id,call_type,status,call_scope')
         .eq('id',callUUID).maybeSingle();
       if(error)throw error;
-      if(!call|| (call.caller_id!==session.user.id&&call.callee_id!==session.user.id))return;
+      if(!call)return;
+      const groupCall=(call.call_scope||'direct')==='group';
+      let groupParticipant:any=null;
+      if(groupCall){
+        const result=await supabase.from('kc_call_participants')
+          .select('status,role').eq('call_id',call.id).eq('user_id',session.user.id).maybeSingle();
+        if(result.error)throw result.error;
+        groupParticipant=result.data;
+        if(!groupParticipant)return;
+      }else if(call.caller_id!==session.user.id&&call.callee_id!==session.user.id)return;
+
       if(action==='answer'){
-        if(call.callee_id===session.user.id&&call.status==='ringing'){
+        const canAnswer=groupCall
+          ?groupParticipant.role==='invitee'&&['ringing','invited'].includes(groupParticipant.status)
+          :call.callee_id===session.user.id&&call.status==='ringing';
+        if(canAnswer){
           setTab('Calls');
           await acceptCallWhenReady(call);
-        }else if(call.status==='accepted'){
+        }else if(call.status==='accepted'&&(!groupCall||groupParticipant.status==='accepted')){
           setTab('Calls');
           if(!liveCall)void joinCall(call);
         }
-      }else if(call.status==='ringing'&&call.callee_id===session.user.id){
+      }else if(call.status==='ringing'&&(groupCall
+        ?groupParticipant.role==='invitee'&&['ringing','invited'].includes(groupParticipant.status)
+        :call.callee_id===session.user.id)){
         await respondToCall(call,'declined');
-      }else if(call.status==='ringing'&&call.caller_id===session.user.id){
+      }else if(call.status==='ringing'&&!groupCall&&call.caller_id===session.user.id){
         await supabase.from('kc_call_logs').update({status:'cancelled',ended_at:new Date().toISOString()}).eq('id',call.id);
         setOutgoingCall(null);
       }else if(call.status==='accepted'){
