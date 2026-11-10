@@ -1427,11 +1427,29 @@ function GuftinApp() {
         setTab('Updates');
       }
     };
+    const foregroundPushSubscription=Notifications.addNotificationReceivedListener((notification:any)=>{
+      const data=notification?.request?.content?.data as any;
+      if(data?.type!=='incoming_call'||typeof data.call_id!=='string')return;
+      void supabase.from('kc_call_logs')
+        .select('id,conversation_id,caller_id,callee_id,call_type,status,call_scope')
+        .eq('id',data.call_id).maybeSingle().then(async({data:call,error})=>{
+          if(error||!call||call.status!=='ringing')return;
+          if((call.call_scope||data.call_scope)==='group'){
+            const {data:participant,error:participantError}=await supabase.from('kc_call_participants')
+              .select('status,role').eq('call_id',call.id).eq('user_id',session.user.id).maybeSingle();
+            if(participantError||!participant||!['invited','ringing'].includes(participant.status))return;
+          }else if(call.callee_id!==session.user.id)return;
+          setIncomingCall({...call,caller_name:data.caller_name||'Guftin contact'});
+        });
+    });
     const subscription=Notifications.addNotificationResponseReceivedListener(handleNotificationResponse);
     void Notifications.getLastNotificationResponseAsync().then(response=>{
       if(response)handleNotificationResponse(response);
     });
-    return ()=>subscription.remove();
+    return ()=>{
+      subscription.remove();
+      foregroundPushSubscription.remove();
+    };
   },[session,respondToCall,acceptCallWhenReady,loadInbox,joinCall]);
 
   const loadMessages=useCallback(async(conversationId:string)=>{
