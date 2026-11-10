@@ -70,6 +70,7 @@ module.exports = ({ config }) => ({
       "android.permission.VIBRATE",
       "android.permission.POST_NOTIFICATIONS",
       "android.permission.USE_FULL_SCREEN_INTENT",
+      "android.permission.FOREGROUND_SERVICE",
       "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
       "android.permission.FOREGROUND_SERVICE_MICROPHONE"
     ]
