@@ -138,6 +138,19 @@ const palette = ['#d49a91','#8796c7','#81ad98','#bd8aa8','#c4a47c','#9a91bd'];
 // Supabase chat-media is currently configured for 50 MB per object. Keep encrypted
 // uploads below that ceiling because authenticated encryption adds a small overhead.
 const MAX_MEDIA_BYTES = 45 * 1024 * 1024;
+const getDocumentMimeType=(name:string)=>{
+  const ext=(name.split('.').pop()||'').toLowerCase();
+  const map:Record<string,string>={
+    pdf:'application/pdf',doc:'application/msword',
+    docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls:'application/vnd.ms-excel',
+    xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ppt:'application/vnd.ms-powerpoint',
+    pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    txt:'text/plain',csv:'text/csv'
+  };
+  return map[ext]||'application/octet-stream';
+};
 const PERMISSION_SETUP_STEPS = [
   {key:'notifications',icon:'🔔',title:'Notifications',description:'Allow message alerts, status likes and views, and incoming voice/video call alerts while Guftin is in the background.'},
   {key:'microphone',icon:'🎙️',title:'Microphone',description:'Allow the microphone for voice messages and voice/video calls.'},
@@ -719,6 +732,7 @@ function GuftinApp() {
           else if(last.message_type==='image')preview='Photo';
           else if(last.message_type==='video')preview='Video';
           else if(last.message_type==='audio')preview='Voice message';
+          else if(last.message_type==='file')preview='Document: '+(last.body?.startsWith(E2EE_MEDIA_PREFIX)?'Encrypted file':(deviceIdentity?decryptMessageForDevice(last.body,deviceIdentity):'File'));
           else if(typeof last.body==='string'&&last.body.startsWith(E2EE_PREFIX)){
             try{preview=deviceIdentity?decryptMessageForDevice(last.body,deviceIdentity):'🔒 Encrypted message';}
             catch{preview='🔒 Encrypted message';}
@@ -1318,7 +1332,7 @@ function GuftinApp() {
               opened.bytes.fill(0);
               pendingMediaItems.push({
                 id:pending.localId,conversation_id:conversationId,sender_id:session.user.id,
-                body:pending.message_type==='video'?'Video':(pending.fileName||'Photo'),
+                body:pending.message_type==='video'?'Video':pending.message_type==='image'?'Photo':(pending.fileName||'Document'),
                 message_type:pending.message_type,attachment_url:previewFile.uri,
                 created_at:pending.created_at,mine:true,pending:true
               });
@@ -1517,14 +1531,14 @@ function GuftinApp() {
   },[session,deviceIdentity,e2eeStatus,loadInbox]);
   flushPendingMessagesRef.current=flushPendingMessages;
 
-  const queueOfflineMedia=async(conversationId:string,asset:any,messageType:'image'|'video',contentType:string,id:string,localId:string)=>{
+  const queueOfflineMedia=async(conversationId:string,asset:any,messageType:'image'|'video'|'file',contentType:string,id:string,localId:string)=>{
     if(!session||!deviceIdentity)throw new Error('Secure chat is not ready.');
     const sourceFile=new File(asset.uri);
     const plainBytes=new Uint8Array(await sourceFile.arrayBuffer());
     const selfDevice={id:deviceIdentity.deviceId,user_id:session.user.id,public_key:deviceIdentity.publicKeyHex};
     const localEncrypted=encryptMediaForDevices(
       plainBytes,[selfDevice],deviceIdentity,contentType,
-      asset.fileName||('attachment.'+(messageType==='video'?'mp4':'jpg'))
+      asset.fileName||('attachment.'+(messageType==='video'?'mp4':messageType==='image'?'jpg':'bin'))
     );
     plainBytes.fill(0);
     const localPath=new File(Paths.document,'guftin-pending-'+id+'.enc');
@@ -1534,7 +1548,7 @@ function GuftinApp() {
     localEncrypted.ciphertext.fill(0);
     const entry={
       id,localId,conversation_id:conversationId,message_type:messageType,contentType,
-      fileName:asset.fileName||('attachment.'+(messageType==='video'?'mp4':'jpg')),
+      fileName:asset.fileName||('attachment.'+(messageType==='video'?'mp4':messageType==='image'?'jpg':'bin')),
       localBody:localEncrypted.body,localFileUri:localPath.uri,created_at:new Date().toISOString()
     };
     const queueKey='guftin-pending-media:'+session.user.id;
@@ -1631,7 +1645,7 @@ function GuftinApp() {
           const localCipher=new Uint8Array(await localEncrypted.arrayBuffer());
           const opened=decryptMediaForDevice(localCipher,pending.localBody,deviceIdentity);
           localCipher.fill(0);
-          const safeExtension=(opened.fileName.split('.').pop()||'mp4').toLowerCase().replace(/[^a-z0-9]/g,'')||'mp4';
+          const safeExtension=(opened.fileName.split('.').pop()|| (pending.message_type==='video'?'mp4':pending.message_type==='image'?'jpg':'bin')).toLowerCase().replace(/[^a-z0-9]/g,'')||'bin';
           const previewFile=new File(Paths.document,'guftin_media_'+pending.id+'.'+safeExtension);
           if(previewFile.exists)previewFile.delete();
           previewFile.create();
@@ -1719,7 +1733,7 @@ function GuftinApp() {
     finally{setRecordingBusy(false);}
   };
 
-  const sendMedia=async()=>{
+  const sendPhotosVideos=async()=>{
     if(!active||!session||mediaPreparing)return;
     if(!deviceIdentity||e2eeStatus!=='ready'){
       Alert.alert('Secure media is not ready','Guftin is still setting up this device encryption key.');
@@ -1773,6 +1787,94 @@ function GuftinApp() {
       setMediaPreparing(false);
       Alert.alert('Encrypted media not sent',e?.message||'Please try another image or video.');
     }
+  };
+
+  const sendDocument=async()=>{
+    if(!active||!session||mediaPreparing)return;
+    if(!deviceIdentity||e2eeStatus!=='ready'){
+      Alert.alert('Secure document sharing not ready','Guftin is still setting up this device encryption key.');
+      return;
+    }
+    try{
+      const result=await DocumentPicker.getDocumentAsync({
+        type:[
+          'application/pdf',
+          'application/msword',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          'application/vnd.ms-excel',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'application/vnd.ms-powerpoint',
+          'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+          'text/plain','text/csv'
+        ],
+        copyToCacheDirectory:true,
+        multiple:false
+      });
+      if(result.canceled||!result.assets?.length)return;
+      const asset=result.assets[0];
+      const fileName=String(asset.name||asset.fileName||'document');
+      const extension=(fileName.split('.').pop()||'').toLowerCase();
+      const allowedExtensions=['pdf','doc','docx','xls','xlsx','ppt','pptx','txt','csv'];
+      const contentType=asset.mimeType&&asset.mimeType!=='application/octet-stream'
+        ?asset.mimeType:getDocumentMimeType(fileName);
+      const allowedTypes=[
+        'application/pdf','application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.ms-excel',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.ms-powerpoint',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        'text/plain','text/csv'
+      ];
+      if(!allowedExtensions.includes(extension)||!allowedTypes.includes(contentType)){
+        Alert.alert('Unsupported document','Choose a PDF, Word, Excel, PowerPoint, TXT or CSV document.');
+        return;
+      }
+      const sourceFile=new File(asset.uri);
+      const byteSize=typeof asset.size==='number'?asset.size:sourceFile.size;
+      if(byteSize>MAX_MEDIA_BYTES){
+        Alert.alert('Document too large','Encrypted documents can be up to 45 MB with the current cloud-storage limit.');
+        return;
+      }
+      const conversationId=active.id;
+      const id=ExpoCrypto.randomUUID();
+      const localId='pending:'+id;
+      const createdAt=new Date().toISOString();
+      const optimistic:Message={
+        id:localId,conversation_id:conversationId,sender_id:session.user.id,
+        body:fileName,message_type:'file',attachment_url:asset.uri,
+        created_at:createdAt,mine:true,pending:true
+      };
+      setMessages(prev=>({...prev,[conversationId]:[...(prev[conversationId]||[]),optimistic]}));
+      setChats(prev=>{
+        const next=prev.map(chat=>chat.id===conversationId
+          ?{...chat,last:'Document: '+fileName,time:timeLabel(createdAt),lastAt:Date.now()}
+          :chat);
+        void AsyncStorage.setItem('guftin-cache-inbox:'+session.user.id,JSON.stringify(next)).catch(()=>{});
+        return next;
+      });
+      setMediaPreparing(true);
+      try{
+        await queueOfflineMedia(conversationId,{...asset,fileName},'file',contentType,id,localId);
+        setMediaPreparing(false);
+        void flushPendingMediaRef.current?.();
+      }catch(queueError:any){
+        setMessages(prev=>({...prev,[conversationId]:(prev[conversationId]||[]).filter(item=>item.id!==localId)}));
+        setMediaPreparing(false);
+        Alert.alert('Document could not be saved',queueError?.message||'The document could not be kept on this phone.');
+      }
+    }catch(error:any){
+      setMediaPreparing(false);
+      Alert.alert('Document not shared',error?.message||'Please choose another document.');
+    }
+  };
+
+  const sendMedia=()=>{
+    Alert.alert('Attach to chat','Choose what you want to share.',[
+      {text:'Photo or video',onPress:()=>void sendPhotosVideos()},
+      {text:'PDF or document',onPress:()=>void sendDocument()},
+      {text:'Cancel',style:'cancel'}
+    ]);
   };
 
   const startCall=async(callType:'voice'|'video')=>{
@@ -2399,7 +2501,14 @@ function GuftinApp() {
       <FlatList data={list} keyExtractor={m=>m.id} contentContainerStyle={{padding:18,gap:12,flexGrow:1,justifyContent:list.length?'flex-end':'center'}}
         ListEmptyComponent={<Text style={{textAlign:'center',color:C.muted}}>No messages yet. Send the first message.</Text>}
         renderItem={({item})=><TouchableOpacity activeOpacity={1} onLongPress={()=>deleteMessage(item)} delayLongPress={420} style={{alignSelf:item.mine?'flex-end':'flex-start',maxWidth:'84%',backgroundColor:item.mine?'#dff4e8':C.white,padding:13,borderRadius:17,borderTopRightRadius:item.mine?5:17,borderTopLeftRadius:item.mine?17:5}}>
-          {item.deleted_at?<Text style={{fontSize:12,color:C.muted,fontStyle:'italic'}}>This message was deleted</Text>:item.message_type==='image'&&item.attachment_url?<Image source={{uri:item.attachment_url}} style={{width:210,height:210,borderRadius:12}} resizeMode="cover"/>:item.message_type==='video'&&item.attachment_url?<VideoBubble uri={item.attachment_url}/>:item.message_type==='audio'&&item.attachment_url?<AudioBubble uri={item.attachment_url}/>:<Text style={{color:C.ink,fontSize:14,lineHeight:21}}>{item.body||'Attachment'}</Text>}
+          {item.deleted_at?<Text style={{fontSize:12,color:C.muted,fontStyle:'italic'}}>This message was deleted</Text>:item.message_type==='image'&&item.attachment_url?<Image source={{uri:item.attachment_url}} style={{width:210,height:210,borderRadius:12}} resizeMode="cover"/>:item.message_type==='video'&&item.attachment_url?<VideoBubble uri={item.attachment_url}/>:item.message_type==='audio'&&item.attachment_url?<AudioBubble uri={item.attachment_url}/>:item.message_type==='file'&&item.attachment_url?<View style={{minWidth:225,maxWidth:270,backgroundColor:C.paper,borderRadius:13,padding:12}}>
+            <Text style={{fontSize:25,color:C.green}}>▤</Text>
+            <Text numberOfLines={2} style={{fontSize:13,fontWeight:'900',color:C.ink,marginTop:5}}>{item.body||'Document'}</Text>
+            <Text style={{fontSize:10,color:C.muted,marginTop:3}}>{getDocumentMimeType(item.body||'').replace('application/','').replace('vnd.openxmlformats-officedocument.','')}</Text>
+            <Btn onPress={()=>void Sharing.shareAsync(item.attachment_url,{mimeType:getDocumentMimeType(item.body||''),dialogTitle:item.body||'Share document'})} style={{marginTop:10,padding:10,borderRadius:10,backgroundColor:C.mint,alignSelf:'flex-start'}}>
+              <Text style={{color:C.green,fontWeight:'900',fontSize:11}}>Open / Share document</Text>
+            </Btn>
+          </View>:<Text style={{color:C.ink,fontSize:14,lineHeight:21}}>{item.body||'Attachment'}</Text>}
           {!item.deleted_at&&['image','video'].includes(item.message_type)&&item.attachment_url?<Btn onPress={()=>void saveMediaToGallery(item)} style={{marginTop:7,paddingVertical:6,paddingHorizontal:9,borderRadius:9,backgroundColor:C.paper,alignSelf:'flex-start'}}><Text style={{fontSize:11,color:C.green,fontWeight:'800'}}>↓ Save to gallery</Text></Btn>:null}
           <Text style={{textAlign:'right',fontSize:9,color:C.muted,marginTop:5}}>
             {timeLabel(item.created_at)}{item.pending?' · Queued':item.mine ? " · " + (showReadReceipts && peerLastReadAt && new Date(peerLastReadAt).getTime() >= new Date(item.created_at).getTime() ? "✓✓ Read" : deliveredByMessage[item.id] ? "✓✓ Delivered" : "✓ Sent") : ""}
