@@ -1,0 +1,58 @@
+name: Guftin Production EAS Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: Branch or commit to build
+        required: true
+        default: kingchat/production-demo
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-production-apk:
+    name: Validate and trigger signed EAS production APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Guftin source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.3'
+
+      - name: Verify Expo owner token is available
+        shell: bash
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::error::GitHub Actions secret EXPO_TOKEN is missing."
+            exit 1
+          fi
+          echo "Expo access token is present (value hidden)."
+
+      - name: Install app dependencies
+        working-directory: apps/kingchat
+        run: npm install --no-audit --no-fund
+
+      - name: TypeScript validation
+        working-directory: apps/kingchat
+        run: npm run typecheck
+
+      - name: Prepare launcher and splash assets
+        working-directory: apps/kingchat
+        run: npm run prepare:assets
+
+      - name: Trigger signed EAS production APK build
+        working-directory: apps/kingchat
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          CI: '1'
+        run: npx --yes eas-cli@latest build --platform android --profile production --non-interactive --no-wait
