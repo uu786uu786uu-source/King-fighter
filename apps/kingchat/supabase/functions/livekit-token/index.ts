@@ -100,6 +100,15 @@ Deno.serve(async (req: Request) => {
     if (participantError || !participant || participant.status !== "accepted") {
       return json({ error: "You are not an accepted participant in this group call." }, 403);
     }
+    const { data: membership, error: membershipError } = await supabase
+      .from("kc_conversation_members")
+      .select("user_id")
+      .eq("conversation_id", call.conversation_id)
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (membershipError || !membership) {
+      return json({ error: "You are no longer a member of this group." }, 403);
+    }
   } else if (call.caller_id !== user.id && call.callee_id !== user.id) {
     return json({ error: "You are not a participant in this call." }, 403);
   }
