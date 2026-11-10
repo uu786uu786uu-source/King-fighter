@@ -109,13 +109,13 @@ jobs:
             --local \
             --non-interactive \
             --freeze-credentials \
-            --output ./dist/Guftin-1.4.17-GitHub.apk
-          test -s ./dist/Guftin-1.4.17-GitHub.apk
+            --output ./dist/Guftin-1.4.18-GitHub.apk
+          test -s ./dist/Guftin-1.4.18-GitHub.apk
 
       - name: Verify APK package and cryptographic signature
         shell: bash
         run: |
-          APK="./dist/Guftin-1.4.17-GitHub.apk"
+          APK="./dist/Guftin-1.4.18-GitHub.apk"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$APK"
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | head -n 1
           sha256sum "$APK"
@@ -124,7 +124,7 @@ jobs:
       - name: Upload GitHub-built APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Guftin-1.4.17-GitHub-APK
-          path: apps/kingchat/dist/Guftin-1.4.17-GitHub.apk
+          name: Guftin-1.4.18-GitHub-APK
+          path: apps/kingchat/dist/Guftin-1.4.18-GitHub.apk
           if-no-files-found: error
           retention-days: 30
