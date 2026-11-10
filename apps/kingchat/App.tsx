@@ -732,7 +732,7 @@ function GuftinApp() {
           else if(last.message_type==='image')preview='Photo';
           else if(last.message_type==='video')preview='Video';
           else if(last.message_type==='audio')preview='Voice message';
-          else if(last.message_type==='file')preview='Document: '+(last.body?.startsWith(E2EE_MEDIA_PREFIX)?'Encrypted file':(deviceIdentity?decryptMessageForDevice(last.body,deviceIdentity):'File'));
+          else if(last.message_type==='file')preview='Document';
           else if(typeof last.body==='string'&&last.body.startsWith(E2EE_PREFIX)){
             try{preview=deviceIdentity?decryptMessageForDevice(last.body,deviceIdentity):'🔒 Encrypted message';}
             catch{preview='🔒 Encrypted message';}
