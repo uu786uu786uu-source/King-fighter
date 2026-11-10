@@ -74,19 +74,33 @@ Deno.serve(async (req: Request) => {
     data = { type: "message", conversation_id: row.conversation_id, message_id: row.id };
   } else if (body.kind === "call" && body.call_id) {
     const { data: row, error } = await admin.from("kc_call_logs")
-      .select("id,conversation_id,caller_id,callee_id,call_type,status")
+      .select("id,conversation_id,caller_id,callee_id,call_type,status,call_scope")
       .eq("id", body.call_id).maybeSingle();
     if (error || !row || row.caller_id !== actor.id || row.status !== "ringing") {
       return json({ error: "Call not found or not owned by this account." }, 404);
     }
-    recipientIds = [row.callee_id].filter(Boolean);
-    title = row.call_type === "video" ? "Incoming video call" : "Incoming voice call";
-    message = actorName + " is calling you. Tap Accept to answer.";
+    if (row.call_scope === "group") {
+      const { data: participants, error: participantsError } = await admin
+        .from("kc_call_participants")
+        .select("user_id")
+        .eq("call_id", row.id)
+        .eq("role", "invitee")
+        .in("status", ["invited", "ringing"]);
+      if (participantsError) return json({ error: "Could not load group-call recipients." }, 500);
+      recipientIds = (participants || []).map((item: any) => item.user_id).filter((id: string) => id && id !== actor.id);
+      title = row.call_type === "video" ? "Incoming group video call" : "Incoming group voice call";
+      message = actorName + " started a group call. Tap Accept to join.";
+    } else {
+      recipientIds = [row.callee_id].filter(Boolean);
+      title = row.call_type === "video" ? "Incoming video call" : "Incoming voice call";
+      message = actorName + " is calling you. Tap Accept to answer.";
+    }
     data = {
       type: "incoming_call",
       call_id: row.id,
       conversation_id: row.conversation_id,
       call_type: row.call_type,
+      call_scope: row.call_scope || "direct",
       caller_name: actorName,
     };
     channelId = "calls";
