@@ -1,0 +1,1 @@
+create index if not exists kc_call_participants_user_id_idx on public.kc_call_participants(user_id);
