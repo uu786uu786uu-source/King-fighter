@@ -67,12 +67,13 @@ const presentNativeIncomingCall = async (payload:any) => {
   const callerName = typeof payload?.caller_name === 'string' && payload.caller_name.trim()
     ? payload.caller_name.trim() : 'Guftin contact';
   const callType = payload?.call_type === 'video' ? 'video' : 'voice';
+  const isGroupCall = payload?.call_scope === 'group';
   try {
     await ensureCallKeepReady();
     await RNCallKeep.displayIncomingCall(
       callId,
       String(payload?.caller_id || callerName),
-      callerName,
+      isGroupCall ? 'Group · '+callerName : callerName,
       'generic',
       callType === 'video'
     );
@@ -81,15 +82,16 @@ const presentNativeIncomingCall = async (payload:any) => {
     try {
       await Notifications.scheduleNotificationAsync({
         content: {
-          title: callType === 'video' ? 'Incoming video call' : 'Incoming voice call',
-          body: callerName + ' is calling you. Tap to answer.',
+          title: isGroupCall ? (callType === 'video' ? 'Incoming group video call' : 'Incoming group voice call') : (callType === 'video' ? 'Incoming video call' : 'Incoming voice call'),
+          body: callerName + (isGroupCall ? ' started a group call. Tap to join.' : ' is calling you. Tap to answer.'),
           sound: 'default',
           categoryIdentifier: 'guftin_incoming_call',
           data: {
             type: 'incoming_call',
             call_id: callId,
             call_type: callType,
-            caller_name: callerName
+            caller_name: callerName,
+            call_scope: isGroupCall ? 'group' : 'direct'
           }
         },
         trigger: null
@@ -236,7 +238,7 @@ function Heading({children}:any) { return <Text style={{fontSize:25,fontWeight:'
 
 function CallControlButton({label,onPress,active=false,danger=false,disabled=false}:any) {
   return <Btn disabled={disabled} onPress={onPress} style={{
-    minWidth:66,minHeight:62,paddingHorizontal:10,paddingVertical:9,
+    minWidth:60,minHeight:62,paddingHorizontal:8,paddingVertical:9,
     alignItems:'center',justifyContent:'center',borderRadius:18,
     backgroundColor:danger?'#c43e48':active?'#f1c65b':'#244b45',
     borderWidth:1,borderColor:danger?'#e45d66':active?'#f4d782':'#47766c',
@@ -751,13 +753,28 @@ function GuftinApp() {
 
   const loadCallHistory=useCallback(async()=>{
     if(!session)return;
-    const {data,error}=await supabase.from('kc_call_logs')
-      .select('id,conversation_id,caller_id,callee_id,call_type,status,call_scope,started_at,ended_at')
-      .or('caller_id.eq.'+session.user.id+',callee_id.eq.'+session.user.id)
-      .order('started_at',{ascending:false}).limit(100);
-    if(error){console.warn('Call history:',error.message);return;}
-    const rows=(data||[]) as any[];
-    const peers=[...new Set(rows.map(row=>row.caller_id===session.user.id?row.callee_id:row.caller_id).filter(Boolean))];
+    const [{data:directRows,error:directError},{data:participantRows,error:participantError}]=await Promise.all([
+      supabase.from('kc_call_logs')
+        .select('id,conversation_id,caller_id,callee_id,call_type,status,call_scope,started_at,ended_at')
+        .or('caller_id.eq.'+session.user.id+',callee_id.eq.'+session.user.id)
+        .order('started_at',{ascending:false}).limit(100),
+      supabase.from('kc_call_participants').select('call_id').eq('user_id',session.user.id)
+    ]);
+    if(directError){console.warn('Call history:',directError.message);return;}
+    if(participantError){console.warn('Call participant history:',participantError.message);return;}
+    const participantIds=[...new Set((participantRows||[]).map((row:any)=>row.call_id).filter(Boolean))];
+    const directIds=new Set((directRows||[]).map((row:any)=>row.id));
+    const missingGroupIds=participantIds.filter((id:string)=>!directIds.has(id));
+    const {data:groupRows,error:groupError}=missingGroupIds.length
+      ?await supabase.from('kc_call_logs')
+        .select('id,conversation_id,caller_id,callee_id,call_type,status,call_scope,started_at,ended_at')
+        .in('id',missingGroupIds).order('started_at',{ascending:false}).limit(100)
+      :{data:[],error:null};
+    if(groupError){console.warn('Group call history:',groupError.message);return;}
+    const rows=[...(directRows||[]),...(groupRows||[])].sort((a:any,b:any)=>
+      new Date(b.started_at||b.ended_at||0).getTime()-new Date(a.started_at||a.ended_at||0).getTime()
+    ).slice(0,100) as any[];
+    const peers=[...new Set(rows.filter(row=>row.call_scope!=='group').map(row=>row.caller_id===session.user.id?row.callee_id:row.caller_id).filter(Boolean))];
     const groupConversationIds=[...new Set(rows.filter(row=>row.call_scope==='group').map(row=>row.conversation_id).filter(Boolean))];
     const [{data:profiles},{data:groupConversations}]=await Promise.all([
       peers.length?supabase.from('kc_profiles').select('id,display_name,avatar_url').in('id',peers):Promise.resolve({data:[]}),
@@ -1258,22 +1275,36 @@ function GuftinApp() {
       const data=response.notification.request.content.data as any;
       const action=response.actionIdentifier;
       if(data?.type==='incoming_call'&&typeof data.call_id==='string'){
-        void supabase.from('kc_call_logs').select('id,conversation_id,caller_id,callee_id,call_type,status')
-          .eq('id',data.call_id).maybeSingle().then(({data:call})=>{
-            if(call?.status!=='ringing')return;
+        void supabase.from('kc_call_logs').select('id,conversation_id,caller_id,callee_id,call_type,status,call_scope')
+          .eq('id',data.call_id).maybeSingle().then(async({data:call})=>{
+            if(!call)return;
+            const isGroup=(call.call_scope||data.call_scope)==='group';
+            let participant:any=null;
+            if(isGroup){
+              const result=await supabase.from('kc_call_participants').select('status,role')
+                .eq('call_id',call.id).eq('user_id',session.user.id).maybeSingle();
+              if(result.error||!result.data)return;
+              participant=result.data;
+              if(!['ringing','invited','accepted'].includes(participant.status))return;
+              if(!['ringing','accepted'].includes(call.status))return;
+            }else if(call.status!=='ringing')return;
             setTab('Calls');
             if(action==='accept_call'){
-              void acceptCallWhenReady(call);
+              if(isGroup&&participant.status==='accepted')void joinCall(call);
+              else void acceptCallWhenReady(call);
               return;
             }
             if(action==='decline_call'){
+              if(isGroup&&participant.status==='accepted')return;
               void respondToCall(call,'declined');
               return;
             }
             setIncomingCall(call);
             Alert.alert(
-              call.call_type==='video'?'Incoming video call':'Incoming voice call',
-              'A Guftin contact is calling you.',
+              isGroup
+                ?(call.call_type==='video'?'Incoming group video call':'Incoming group voice call')
+                :(call.call_type==='video'?'Incoming video call':'Incoming voice call'),
+              isGroup?'Your group call is waiting. Join now or decline the invitation.':'A Guftin contact is calling you.',
               [
                 {text:'Decline',style:'cancel',onPress:()=>void respondToCall(call,'declined')},
                 {text:'Accept',onPress:()=>void acceptCallWhenReady(call)}
@@ -1296,7 +1327,7 @@ function GuftinApp() {
       if(response)handleNotificationResponse(response);
     });
     return ()=>subscription.remove();
-  },[session,respondToCall,acceptCallWhenReady,loadInbox]);
+  },[session,respondToCall,acceptCallWhenReady,loadInbox,joinCall]);
 
   const loadMessages=useCallback(async(conversationId:string)=>{
     if(!session) return;
