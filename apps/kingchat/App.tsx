@@ -2008,9 +2008,9 @@ function GuftinApp() {
           setTab('Calls');
           if(!liveCall)void joinCall(call);
         }
-      }else if(call.status==='ringing'&&(groupCall
-        ?groupParticipant.role==='invitee'&&['ringing','invited'].includes(groupParticipant.status)
-        :call.callee_id===session.user.id)){
+      }else if(groupCall&&groupParticipant.role==='invitee'&&['ringing','invited'].includes(groupParticipant.status)&&['ringing','accepted'].includes(call.status)){
+        await respondToCall(call,'declined');
+      }else if(call.status==='ringing'&&!groupCall&&call.callee_id===session.user.id){
         await respondToCall(call,'declined');
       }else if(call.status==='ringing'&&groupCall&&groupParticipant.role==='caller'){
         await endCall(call.id,true);
@@ -2023,7 +2023,7 @@ function GuftinApp() {
     }catch(error:any){
       console.warn('Native call action failed:',error?.message||error);
     }
-  },[session,acceptCallWhenReady,respondToCall,joinCall,liveCall]);
+  },[session,acceptCallWhenReady,respondToCall,joinCall,liveCall,outgoingCall]);
 
   const nativeCallActionHandlerRef=useRef<any>(null);
   nativeCallActionHandlerRef.current=handleNativeCallAction;
