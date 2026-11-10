@@ -26,6 +26,8 @@ Do not tell users to uninstall the existing app until they have considered the l
 
 ## GitHub runner fallback
 
+The GitHub workflow uses the current Android setup action; SDK licences are accepted once by the action and the native toolchain packages are installed explicitly.
+
 The repository now includes `.github/workflows/guftin-github-local-apk.yml`, which compiles the same Android APK on a GitHub-hosted Ubuntu runner using `eas build --local`. It uses the existing EAS-managed Android keystore; it does not generate a new release key.
 
 Required repository secret: `EXPO_TOKEN` (Expo Owner access token). Never commit the token to source files or print it in logs.
