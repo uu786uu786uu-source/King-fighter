@@ -240,7 +240,7 @@ function CallControlButton({label,onPress,active=false,danger=false,disabled=fal
     alignItems:'center',justifyContent:'center',borderRadius:18,
     backgroundColor:danger?'#c43e48':active?'#f1c65b':'#244b45',
     borderWidth:1,borderColor:danger?'#e45d66':active?'#f4d782':'#47766c',
-    opacity:disabled?.45:1
+    opacity:disabled ? 0.45 : 1
   }}>
     <Text style={{color:danger?'#fff':active?'#23362f':'#fff',fontSize:11,fontWeight:'900',textAlign:'center'}}>{label}</Text>
   </Btn>;
@@ -752,18 +752,24 @@ function GuftinApp() {
   const loadCallHistory=useCallback(async()=>{
     if(!session)return;
     const {data,error}=await supabase.from('kc_call_logs')
-      .select('id,conversation_id,caller_id,callee_id,call_type,status,started_at,ended_at')
+      .select('id,conversation_id,caller_id,callee_id,call_type,status,call_scope,started_at,ended_at')
       .or('caller_id.eq.'+session.user.id+',callee_id.eq.'+session.user.id)
       .order('started_at',{ascending:false}).limit(100);
     if(error){console.warn('Call history:',error.message);return;}
     const rows=(data||[]) as any[];
     const peers=[...new Set(rows.map(row=>row.caller_id===session.user.id?row.callee_id:row.caller_id).filter(Boolean))];
-    const {data:profiles}=peers.length?await supabase.from('kc_profiles').select('id,display_name,avatar_url').in('id',peers):{data:[]};
+    const groupConversationIds=[...new Set(rows.filter(row=>row.call_scope==='group').map(row=>row.conversation_id).filter(Boolean))];
+    const [{data:profiles},{data:groupConversations}]=await Promise.all([
+      peers.length?supabase.from('kc_profiles').select('id,display_name,avatar_url').in('id',peers):Promise.resolve({data:[]}),
+      groupConversationIds.length?supabase.from('kc_conversations').select('id,title').in('id',groupConversationIds):Promise.resolve({data:[]})
+    ]);
     const profileMap=new Map((profiles||[]).map((p:any)=>[p.id,p]));
+    const groupMap=new Map((groupConversations||[]).map((c:any)=>[c.id,c.title||'Group call']));
     setCallHistory(rows.map(row=>{
       const peerId=row.caller_id===session.user.id?row.callee_id:row.caller_id;
       const peer:any=profileMap.get(peerId);
-      return {...row,peer_name:peer?.display_name||'Guftin member',outgoing:row.caller_id===session.user.id};
+      const peerName=row.call_scope==='group'?(groupMap.get(row.conversation_id)||'Group call'):(peer?.display_name||'Guftin member');
+      return {...row,peer_name:peerName,outgoing:row.caller_id===session.user.id};
     }));
   },[session]);
 
@@ -1951,7 +1957,7 @@ function GuftinApp() {
   };
 
   const endCall=async(callId:string,fromNative=false)=>{
-    const endingGroup=liveCall?.id===callId&&liveCall?.callScope==='group';
+    const endingGroup=(liveCall?.id===callId&&liveCall?.callScope==='group')||(outgoingCall?.id===callId&&outgoingCall?.call_scope==='group');
     if(endingGroup){
       const {error}=await supabase.rpc('kc_leave_group_call',{p_call_id:callId});
       if(error)Alert.alert('Could not leave group call',error.message);
@@ -2006,6 +2012,8 @@ function GuftinApp() {
         ?groupParticipant.role==='invitee'&&['ringing','invited'].includes(groupParticipant.status)
         :call.callee_id===session.user.id)){
         await respondToCall(call,'declined');
+      }else if(call.status==='ringing'&&groupCall&&groupParticipant.role==='caller'){
+        await endCall(call.id,true);
       }else if(call.status==='ringing'&&!groupCall&&call.caller_id===session.user.id){
         await supabase.from('kc_call_logs').update({status:'cancelled',ended_at:new Date().toISOString()}).eq('id',call.id);
         setOutgoingCall(null);
@@ -2495,8 +2503,10 @@ function GuftinApp() {
           <Text numberOfLines={1} style={{fontWeight:'900',fontSize:15,color:C.ink}}>{active.name}</Text>
           <Text style={{fontSize:11,color:active.online?C.green:C.muted}}>{active.kind==='group'?'Tap for group info':outgoingCall?'Calling…':active.online?'● online':'Tap for contact info'}</Text>
         </Btn>
-        <Btn disabled={callBusy||!!outgoingCall} onPress={()=>void startCall('voice')} style={{backgroundColor:C.mint,borderRadius:15,width:56,height:58,alignItems:'center',justifyContent:'center',opacity:callBusy?0.5:1,borderWidth:1,borderColor:'#cce9dc'}}><Text style={{fontSize:20,color:C.green}}>☎</Text><Text style={{fontSize:10,fontWeight:'900',color:C.green}}>Call</Text></Btn>
-        <Btn disabled={callBusy||!!outgoingCall} onPress={()=>void startCall('video')} style={{backgroundColor:C.mint,borderRadius:15,width:56,height:58,alignItems:'center',justifyContent:'center',opacity:callBusy?0.5:1,borderWidth:1,borderColor:'#cce9dc'}}><Text style={{fontSize:19,color:C.green}}>▣</Text><Text style={{fontSize:10,fontWeight:'900',color:C.green}}>Video</Text></Btn>
+        {outgoingCall?<Btn onPress={()=>void endCall(outgoingCall.id)} style={{backgroundColor:'#fde8e8',borderRadius:15,width:62,height:58,alignItems:'center',justifyContent:'center',borderWidth:1,borderColor:'#f3c6c6'}}><Text style={{fontSize:11,fontWeight:'900',color:C.red}}>Cancel</Text><Text style={{fontSize:9,color:C.red}}>call</Text></Btn>:<>
+          <Btn disabled={callBusy} onPress={()=>void startCall('voice')} style={{backgroundColor:C.mint,borderRadius:15,width:56,height:58,alignItems:'center',justifyContent:'center',opacity:callBusy?0.5:1,borderWidth:1,borderColor:'#cce9dc'}}><Text style={{fontSize:20,color:C.green}}>☎</Text><Text style={{fontSize:10,fontWeight:'900',color:C.green}}>{active.kind==='group'?'Group call':'Call'}</Text></Btn>
+          <Btn disabled={callBusy} onPress={()=>void startCall('video')} style={{backgroundColor:C.mint,borderRadius:15,width:56,height:58,alignItems:'center',justifyContent:'center',opacity:callBusy?0.5:1,borderWidth:1,borderColor:'#cce9dc'}}><Text style={{fontSize:19,color:C.green}}>▣</Text><Text style={{fontSize:10,fontWeight:'900',color:C.green}}>Video</Text></Btn>
+        </>}
       </View>
       <FlatList data={list} keyExtractor={m=>m.id} contentContainerStyle={{padding:18,gap:12,flexGrow:1,justifyContent:list.length?'flex-end':'center'}}
         ListEmptyComponent={<Text style={{textAlign:'center',color:C.muted}}>No messages yet. Send the first message.</Text>}
