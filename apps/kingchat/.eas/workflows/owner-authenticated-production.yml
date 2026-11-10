@@ -41,5 +41,11 @@ jobs:
       - name: Validate TypeScript
         run: npm run typecheck
 
+      - name: Validate Expo SDK dependency versions
+        run: npx --yes expo install --check
+
+      - name: Run Expo Doctor
+        run: npx --yes expo-doctor@latest
+
       - name: Start signed Android production APK build
         run: npx --yes eas-cli@latest build --platform android --profile production --non-interactive --no-wait
