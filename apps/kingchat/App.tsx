@@ -18,6 +18,7 @@ import { Audio } from 'expo-av';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
+import * as IntentLauncher from 'expo-intent-launcher';
 import RNCallKeep from 'react-native-callkeep';
 import mobileAds, { BannerAd, BannerAdSize, MaxAdContentRating, TestIds } from 'react-native-google-mobile-ads';
 import { File, Paths } from 'expo-file-system';
@@ -69,7 +70,12 @@ const presentNativeIncomingCall = async (payload:any) => {
   const callType = payload?.call_type === 'video' ? 'video' : 'voice';
   const isGroupCall = payload?.call_scope === 'group';
   try {
+    // The foreground app renders its own full-screen call surface. When it is
+    // backgrounded or headless, hand the incoming call to Android Telecom.
+    if (AppState.currentState === 'active') return;
     await ensureCallKeepReady();
+    const phoneAccountEnabled = await RNCallKeep.hasPhoneAccount();
+    if (!phoneAccountEnabled) throw new Error('Guftin calling account is not enabled in Android Phone accounts.');
     await RNCallKeep.displayIncomingCall(
       callId,
       String(payload?.caller_id || callerName),
@@ -86,6 +92,7 @@ const presentNativeIncomingCall = async (payload:any) => {
           body: callerName + (isGroupCall ? ' started a group call. Tap to join.' : ' is calling you. Tap to answer.'),
           sound: 'default',
           categoryIdentifier: 'guftin_incoming_call',
+          channelId: 'calls',
           data: {
             type: 'incoming_call',
             call_id: callId,
@@ -350,6 +357,72 @@ function CallRoomScreen({callType,onHangUp,callScope}:any) {
     </View>
   </SafeAreaView>;
 }
+function CallLobbyScreen({call,mode,onAccept,onDecline,onCancel,busy}:any) {
+  const incoming = mode === 'incoming';
+  const callType = call?.call_type || call?.callType || 'voice';
+  const isVideo = callType === 'video';
+  const isGroup = (call?.call_scope || call?.callScope) === 'group';
+  const displayName = incoming
+    ? (call?.caller_name || 'Guftin contact')
+    : (call?.contact_name || call?.caller_name || 'Guftin contact');
+  const statusLabel = busy
+    ? 'Preparing secure connection…'
+    : incoming
+      ? (isVideo ? 'Incoming video call' : 'Incoming voice call')
+      : (isVideo ? 'Calling by video…' : 'Calling…');
+
+  return <SafeAreaView style={{flex:1,backgroundColor:'#071b18'}}>
+    <StatusBar barStyle="light-content" backgroundColor="#071b18"/>
+    <View style={{flex:1,paddingHorizontal:25,paddingTop:24,paddingBottom:26,justifyContent:'space-between'}}>
+      <View style={{alignItems:'center'}}>
+        <Text style={{fontSize:18,fontWeight:'900',letterSpacing:4,color:'#f4fff9'}}>GUFTIN</Text>
+        <View style={{marginTop:8,paddingHorizontal:13,paddingVertical:6,borderRadius:20,backgroundColor:'#123d32',borderWidth:1,borderColor:'#236451'}}>
+          <Text style={{fontSize:9,fontWeight:'900',letterSpacing:2,color:'#9de5c5'}}>PRIVATE {isVideo?'VIDEO':'VOICE'} CALL</Text>
+        </View>
+      </View>
+
+      <View style={{alignItems:'center',justifyContent:'center',flex:1,paddingVertical:24}}>
+        <View style={{width:202,height:202,borderRadius:101,borderWidth:1,backgroundColor:'#0b2a23',borderColor:'#286a55',alignItems:'center',justifyContent:'center',shadowColor:'#31c48d',shadowOpacity:0.22,shadowRadius:24,elevation:12}}>
+          <View style={{width:164,height:164,borderRadius:82,borderWidth:2,borderColor:'#3a9c79',backgroundColor:'#164638',alignItems:'center',justifyContent:'center'}}>
+            <Text style={{fontSize:55,fontWeight:'900',color:'#f5fff9'}}>{initials(displayName)}</Text>
+          </View>
+        </View>
+        <Text numberOfLines={2} style={{fontSize:30,fontWeight:'900',color:'#fff',textAlign:'center',marginTop:30,letterSpacing:-0.6}}>{displayName}</Text>
+        <Text style={{fontSize:13,color:'#a8cfc0',marginTop:9,fontWeight:'700'}}>{isGroup?'Group conversation':isVideo?'Guftin video call':'Guftin voice call'}</Text>
+        <View style={{marginTop:24,paddingHorizontal:17,paddingVertical:10,borderRadius:18,backgroundColor:'#10382d',borderWidth:1,borderColor:'#245c49',flexDirection:'row',alignItems:'center',gap:9}}>
+          <View style={{width:7,height:7,borderRadius:4,backgroundColor:busy?'#e8c46a':'#52dda2'}}/>
+          <Text style={{fontSize:12,color:'#d9f3e7',fontWeight:'800'}}>{statusLabel}</Text>
+        </View>
+        <Text style={{fontSize:11,color:'#789f90',marginTop:17,textAlign:'center',lineHeight:17}}>
+          {incoming?'Answer to connect, or decline this call.':'Waiting for the other person to answer.'}
+        </Text>
+      </View>
+
+      {incoming
+        ? <View style={{flexDirection:'row',justifyContent:'space-around',alignItems:'center',paddingTop:12}}>
+            <View style={{alignItems:'center',gap:10}}>
+              <Btn disabled={busy} onPress={onDecline} style={{width:76,height:76,borderRadius:38,backgroundColor:'#d94350',alignItems:'center',justifyContent:'center',borderWidth:1,borderColor:'#fa7b83',opacity:busy?0.5:1}}>
+                <Text style={{fontSize:34,color:'#fff',fontWeight:'500'}}>×</Text>
+              </Btn>
+              <Text style={{fontSize:12,color:'#ffd9dc',fontWeight:'800'}}>Decline</Text>
+            </View>
+            <View style={{alignItems:'center',gap:10}}>
+              <Btn disabled={busy} onPress={onAccept} style={{width:82,height:82,borderRadius:41,backgroundColor:'#18a96f',alignItems:'center',justifyContent:'center',borderWidth:2,borderColor:'#82edbd',elevation:10,opacity:busy?0.5:1}}>
+                <Text style={{fontSize:31,color:'#fff'}}>{isVideo?'▣':'☎'}</Text>
+              </Btn>
+              <Text style={{fontSize:12,color:'#bff7d9',fontWeight:'900'}}>Answer</Text>
+            </View>
+          </View>
+        : <View style={{alignItems:'center',paddingTop:12}}>
+            <Btn onPress={onCancel} style={{width:76,height:76,borderRadius:38,backgroundColor:'#d94350',alignItems:'center',justifyContent:'center',borderWidth:1,borderColor:'#fa7b83'}}>
+              <Text style={{fontSize:34,color:'#fff',fontWeight:'500'}}>×</Text>
+            </Btn>
+            <Text style={{fontSize:12,color:'#ffd9dc',fontWeight:'800',marginTop:10}}>Cancel call</Text>
+          </View>}
+    </View>
+  </SafeAreaView>;
+}
+
 function SecureLiveKitRoom({liveCall,onDisconnected,onHangUp}:any) {
   // One group-call key is wrapped separately to every registered participant device.
   const {e2eeManager}=useRNE2EEManager({sharedKey:liveCall.e2eeKey});
@@ -987,6 +1060,28 @@ function GuftinApp() {
     }finally{setPermissionSetupBusy(false);}
   };
 
+  const openFullScreenCallSettings=async()=>{
+    if(Platform.OS!=='android')return;
+    try{
+      if(Number(Platform.Version)>=34){
+        await IntentLauncher.startActivityAsync(
+          IntentLauncher.ActivityAction.MANAGE_APP_USE_FULL_SCREEN_INTENT,
+          {data:'package:com.guftin.app'}
+        );
+      }else{
+        await IntentLauncher.startActivityAsync(
+          IntentLauncher.ActivityAction.APP_NOTIFICATION_SETTINGS,
+          {extra:{'android.provider.extra.APP_PACKAGE':'com.guftin.app'}}
+        );
+      }
+    }catch(error:any){
+      Alert.alert(
+        'Incoming call screen settings',
+        'Open Android Settings → Apps → Guftin → Notifications. On Android 14 or later, also allow full-screen notifications under Special app access.'
+      );
+    }
+  };
+
   const dispatchPush=async(kind:'message'|'call'|'status'|'status_like'|'status_view',id:string)=>{
     try{
       const payload=kind==='message'?{kind,message_id:id}:kind==='call'?{kind,call_id:id}:{kind,status_id:id};
@@ -1187,14 +1282,23 @@ function GuftinApp() {
           ?call.caller_id!==session.user.id&&call.status==='ringing'
           :call.callee_id===session.user.id&&call.status==='ringing';
         if(incoming){
-          setIncomingCall(call);
-          void presentNativeIncomingCall({
-            call_id:call.id,
-            caller_id:call.caller_id,
-            caller_name:'Guftin contact',
-            call_type:call.call_type,
-            call_scope:call.call_scope||'direct'
-          });
+          void (async()=>{
+            let callerName='Guftin contact';
+            try{
+              const {data:callerProfile}=await supabase.from('kc_profiles')
+                .select('display_name').eq('id',call.caller_id).maybeSingle();
+              if(callerProfile?.display_name)callerName=callerProfile.display_name;
+            }catch{}
+            const incomingWithName={...call,caller_name:callerName};
+            setIncomingCall(incomingWithName);
+            await presentNativeIncomingCall({
+              call_id:call.id,
+              caller_id:call.caller_id,
+              caller_name:callerName,
+              call_type:call.call_type,
+              call_scope:call.call_scope||'direct'
+            });
+          })();
         }
         if(call.caller_id===session.user.id&&call.status==='accepted'){
           void joinCall(call);
@@ -1299,18 +1403,7 @@ function GuftinApp() {
               void respondToCall(call,'declined');
               return;
             }
-            setIncomingCall(call);
-            Alert.alert(
-              isGroup
-                ?(call.call_type==='video'?'Incoming group video call':'Incoming group voice call')
-                :(call.call_type==='video'?'Incoming video call':'Incoming voice call'),
-              isGroup?'Your group call is waiting. Join now or decline the invitation.':'A Guftin contact is calling you.',
-              [
-                {text:'Decline',style:'cancel',onPress:()=>void respondToCall(call,'declined')},
-                {text:'Accept',onPress:()=>void acceptCallWhenReady(call)}
-              ],
-              {cancelable:false}
-            );
+            setIncomingCall({...call,caller_name:data.caller_name||'Guftin contact'});
           });
       }else if(data?.type==='message'){
         setTab('Chats');
@@ -1975,11 +2068,22 @@ function GuftinApp() {
         if(error)throw error;
         call=data;
       }
-      setOutgoingCall(call);
+      setOutgoingCall({...call,contact_name:active.name,contact_avatar:active.avatar});
       void dispatchPush('call',call.id);
-      Alert.alert(active.kind==='group'?'Group call started':'Calling',active.kind==='group'
-        ?'Your group has been invited. Members can join as they answer.'
-        :'Calling '+active.name+'. Keep Guftin open while they answer.');
+      if(Platform.OS==='android'){
+        void (async()=>{
+          try{
+            await ensureCallKeepReady();
+            if(await RNCallKeep.hasPhoneAccount()){
+              await RNCallKeep.startCall(call.id,active.id,active.name);
+            }else{
+              console.warn('Native outgoing call screen is unavailable until the Guftin phone account is enabled.');
+            }
+          }catch(nativeCallError:any){
+            console.warn('Native outgoing call registration failed:',nativeCallError?.message||nativeCallError);
+          }
+        })();
+      }
     }catch(e:any){
       Alert.alert('Call could not start',e?.message||'Please try again.');
     }finally{
@@ -2523,6 +2627,24 @@ function GuftinApp() {
     />;
   }
 
+  if(incomingCall){
+    return <CallLobbyScreen
+      call={incomingCall}
+      mode="incoming"
+      busy={!!pendingCallAccept&&pendingCallAccept.id===incomingCall.id}
+      onAccept={()=>void acceptCallWhenReady(incomingCall)}
+      onDecline={()=>void respondToCall(incomingCall,'declined')}
+    />;
+  }
+
+  if(outgoingCall){
+    return <CallLobbyScreen
+      call={outgoingCall}
+      mode="outgoing"
+      onCancel={()=>void endCall(outgoingCall.id)}
+    />;
+  }
+
   if(active){
     const list=messages[active.id]||[];
     return <SafeAreaView style={{flex:1,backgroundColor:C.paper}}>
@@ -2776,6 +2898,10 @@ function GuftinApp() {
         <Btn disabled={pushBusy||!session} onPress={()=>void testPushNotifications()} style={{backgroundColor:C.mint,padding:12,borderRadius:13,marginTop:2,marginBottom:7,opacity:pushBusy ? .55 : 1}}>
           <Text style={{color:C.green,fontWeight:'900',textAlign:'center'}}>{pushBusy?'Checking notification service…':'Send test notification to this phone'}</Text>
         </Btn>
+        {Platform.OS==='android'?<Btn onPress={()=>void openFullScreenCallSettings()} style={{padding:13,backgroundColor:C.mint,borderRadius:13,marginTop:6,marginBottom:8}}>
+          <Text style={{color:C.green,fontWeight:'900',textAlign:'center'}}>Enable full-screen incoming calls　›</Text>
+          <Text style={{color:C.muted,fontSize:10,textAlign:'center',marginTop:4}}>Android 14+: allow full-screen notifications in Special app access</Text>
+        </Btn>:null}
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Automatic message sync</Text><Text style={{color:C.muted,fontSize:11}}>Refresh while Guftin is open</Text></View><Switch value={autoSync} onValueChange={setAutoSync} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Auto-save incoming photos/videos</Text><Text style={{color:C.muted,fontSize:11}}>Save new media to your gallery automatically</Text></View><Switch value={mediaAutoDownload} onValueChange={setMediaAutoDownload} trackColor={{true:C.green}}/></View>
         <Text style={{color:C.ink,fontWeight:'800',marginTop:12}}>App theme</Text>
