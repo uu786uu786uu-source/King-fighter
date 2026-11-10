@@ -1060,6 +1060,16 @@ function GuftinApp() {
     }finally{setPermissionSetupBusy(false);}
   };
 
+  const openPhoneAccountSettings=async()=>{
+    if(Platform.OS!=='android')return;
+    try{
+      await ensureCallKeepReady();
+      await IntentLauncher.startActivityAsync('android.telecom.action.CHANGE_PHONE_ACCOUNTS');
+    }catch(error:any){
+      Alert.alert('Android calling account','Open your Phone app settings → Calling accounts → Guftin, then enable the Guftin account.');
+    }
+  };
+
   const openFullScreenCallSettings=async()=>{
     if(Platform.OS!=='android')return;
     try{
@@ -1156,7 +1166,10 @@ function GuftinApp() {
       if(error)throw error;
       if(!data?.server_url||!data?.participant_token)throw new Error(data?.error||'The LiveKit token endpoint is not ready.');
       setLiveCall({id:call.id,callType:callRecord.call_type,callScope,serverUrl:data.server_url,token:data.participant_token,e2eeKey});
-      if(Platform.OS==='android')RNCallKeep.setCurrentCallActive(call.id);
+      if(Platform.OS==='android'){
+        try{await RNCallKeep.setCurrentCallActive(call.id);}
+        catch(nativeStateError:any){console.warn('Android Telecom call-state sync:',nativeStateError?.message||nativeStateError);}
+      }
       setIncomingCall(null);
       setOutgoingCall(null);
     }catch(e:any){
@@ -2898,10 +2911,16 @@ function GuftinApp() {
         <Btn disabled={pushBusy||!session} onPress={()=>void testPushNotifications()} style={{backgroundColor:C.mint,padding:12,borderRadius:13,marginTop:2,marginBottom:7,opacity:pushBusy ? .55 : 1}}>
           <Text style={{color:C.green,fontWeight:'900',textAlign:'center'}}>{pushBusy?'Checking notification service…':'Send test notification to this phone'}</Text>
         </Btn>
-        {Platform.OS==='android'?<Btn onPress={()=>void openFullScreenCallSettings()} style={{padding:13,backgroundColor:C.mint,borderRadius:13,marginTop:6,marginBottom:8}}>
-          <Text style={{color:C.green,fontWeight:'900',textAlign:'center'}}>Enable full-screen incoming calls　›</Text>
-          <Text style={{color:C.muted,fontSize:10,textAlign:'center',marginTop:4}}>Android 14+: allow full-screen notifications in Special app access</Text>
-        </Btn>:null}
+        {Platform.OS==='android'?<>
+          <Btn onPress={()=>void openPhoneAccountSettings()} style={{padding:13,backgroundColor:C.mint,borderRadius:13,marginTop:6,marginBottom:8}}>
+            <Text style={{color:C.green,fontWeight:'900',textAlign:'center'}}>Enable Guftin calling account　›</Text>
+            <Text style={{color:C.muted,fontSize:10,textAlign:'center',marginTop:4}}>Allow Android Telecom to show and ring incoming calls</Text>
+          </Btn>
+          <Btn onPress={()=>void openFullScreenCallSettings()} style={{padding:13,backgroundColor:C.mint,borderRadius:13,marginBottom:8}}>
+            <Text style={{color:C.green,fontWeight:'900',textAlign:'center'}}>Enable full-screen incoming calls　›</Text>
+            <Text style={{color:C.muted,fontSize:10,textAlign:'center',marginTop:4}}>Android 14+: allow full-screen notifications in Special app access</Text>
+          </Btn>
+        </>:null}
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Automatic message sync</Text><Text style={{color:C.muted,fontSize:11}}>Refresh while Guftin is open</Text></View><Switch value={autoSync} onValueChange={setAutoSync} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Auto-save incoming photos/videos</Text><Text style={{color:C.muted,fontSize:11}}>Save new media to your gallery automatically</Text></View><Switch value={mediaAutoDownload} onValueChange={setMediaAutoDownload} trackColor={{true:C.green}}/></View>
         <Text style={{color:C.ink,fontWeight:'800',marginTop:12}}>App theme</Text>
