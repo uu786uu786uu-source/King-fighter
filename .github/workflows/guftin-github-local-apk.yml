@@ -70,7 +70,7 @@ jobs:
       - name: Install the same Android native toolchain used by the EAS build
         shell: bash
         run: |
-          yes | sdkmanager --licenses >/dev/null
+          # setup-android@v4 has already accepted the SDK licenses.
           sdkmanager --install \
             "platform-tools" \
             "platforms;android-36" \
