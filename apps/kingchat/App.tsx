@@ -1818,7 +1818,7 @@ function GuftinApp() {
       });
       if(result.canceled||!result.assets?.length)return;
       const asset=result.assets[0];
-      const fileName=String(asset.name||asset.fileName||'document');
+      const fileName=String(asset.name||'document');
       const extension=(fileName.split('.').pop()||'').toLowerCase();
       const allowedExtensions=['pdf','doc','docx','xls','xlsx','ppt','pptx','txt','csv'];
       const contentType=asset.mimeType&&asset.mimeType!=='application/octet-stream'
@@ -2515,7 +2515,7 @@ function GuftinApp() {
             <Text style={{fontSize:25,color:C.green}}>▤</Text>
             <Text numberOfLines={2} style={{fontSize:13,fontWeight:'900',color:C.ink,marginTop:5}}>{item.body||'Document'}</Text>
             <Text style={{fontSize:10,color:C.muted,marginTop:3}}>{getDocumentMimeType(item.body||'').replace('application/','').replace('vnd.openxmlformats-officedocument.','')}</Text>
-            <Btn onPress={()=>void Sharing.shareAsync(item.attachment_url,{mimeType:getDocumentMimeType(item.body||''),dialogTitle:item.body||'Share document'})} style={{marginTop:10,padding:10,borderRadius:10,backgroundColor:C.mint,alignSelf:'flex-start'}}>
+            <Btn onPress={()=>void Sharing.shareAsync(item.attachment_url!,{mimeType:getDocumentMimeType(item.body||''),dialogTitle:item.body||'Share document'})} style={{marginTop:10,padding:10,borderRadius:10,backgroundColor:C.mint,alignSelf:'flex-start'}}>
               <Text style={{color:C.green,fontWeight:'900',fontSize:11}}>Open / Share document</Text>
             </Btn>
           </View>:<Text style={{color:C.ink,fontSize:14,lineHeight:21}}>{item.body||'Attachment'}</Text>}
