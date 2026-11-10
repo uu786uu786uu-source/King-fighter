@@ -42,6 +42,14 @@ jobs:
         working-directory: apps/kingchat
         run: npm install --no-audit --no-fund
 
+      - name: Verify Expo identity and Guftin project access
+        working-directory: apps/kingchat
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          npx --yes eas-cli@latest whoami
+          npx --yes eas-cli@latest project:info
+
       - name: TypeScript validation
         working-directory: apps/kingchat
         run: npm run typecheck
