@@ -160,8 +160,10 @@ const getDocumentMimeType=(name:string)=>{
 };
 const PERMISSION_SETUP_STEPS = [
   {key:'notifications',icon:'🔔',title:'Notifications',description:'Allow message alerts, status likes and views, and incoming voice/video call alerts while Guftin is in the background.'},
-  {key:'phoneAccount',icon:'📞',title:'Android calling account',description:'Enable Guftin in Android Phone accounts so the system can show the full incoming-call screen and native call controls.'},
-  {key:'fullScreenCalls',icon:'📲',title:'Full-screen incoming calls',description:'Allow Guftin to show the complete incoming-call screen over the lock screen and other apps. Android opens the special-access settings page.'},
+  ...(Platform.OS==='android'?[
+    {key:'phoneAccount',icon:'📞',title:'Android calling account',description:'Enable Guftin in Android Phone accounts so the system can show the full incoming-call screen and native call controls.'},
+    {key:'fullScreenCalls',icon:'📲',title:'Full-screen incoming calls',description:'Allow Guftin to show the complete incoming-call screen over the lock screen and other apps. Android opens the special-access settings page.'}
+  ]:[]),
   {key:'microphone',icon:'🎙️',title:'Microphone',description:'Allow the microphone for voice messages and voice/video calls.'},
   {key:'camera',icon:'📷',title:'Camera',description:'Allow the camera so you can join video calls and share camera video.'},
   {key:'photos',icon:'🖼️',title:'Photos and videos',description:'Allow photo and video access when you choose a profile picture, share media, or post a status.'},
@@ -2714,6 +2716,7 @@ function GuftinApp() {
             <Switch value={permissionSetupAutoSave} onValueChange={setPermissionSetupAutoSave} trackColor={{true:C.green}}/>
           </View>:null}
           {permissionSetupNotice?<Text style={{fontSize:11,color:C.muted,lineHeight:17,marginTop:15}}>{permissionSetupNotice}</Text>:null}
+          {permissionSetupAwaitingSystemSetting?<Text style={{fontSize:11,color:C.green,lineHeight:17,marginTop:10}}>Android Settings opened. Enable the switch there and return to Guftin; it will check the setting automatically.</Text>:null}
         </View>
         <View style={{flexDirection:'row',gap:10,marginTop:22}}>
           <Btn disabled={permissionSetupBusy} onPress={()=>void skipPermissionSetupStep()} style={{flex:1,padding:15,borderRadius:14,alignItems:'center',backgroundColor:C.white,borderWidth:1,borderColor:C.line}}>
