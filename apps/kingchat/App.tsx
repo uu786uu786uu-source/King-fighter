@@ -92,7 +92,6 @@ const presentNativeIncomingCall = async (payload:any) => {
           body: callerName + (isGroupCall ? ' started a group call. Tap to join.' : ' is calling you. Tap to answer.'),
           sound: 'default',
           categoryIdentifier: 'guftin_incoming_call',
-          channelId: 'calls',
           data: {
             type: 'incoming_call',
             call_id: callId,
@@ -101,7 +100,7 @@ const presentNativeIncomingCall = async (payload:any) => {
             call_scope: isGroupCall ? 'group' : 'direct'
           }
         },
-        trigger: null
+        trigger: {channelId: 'calls'}
       });
     } catch (fallbackError:any) {
       console.warn('Incoming-call notification fallback failed:', fallbackError?.message || fallbackError);
