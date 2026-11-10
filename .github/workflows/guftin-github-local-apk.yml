@@ -1,0 +1,128 @@
+name: Guftin GitHub Runner — Production Android APK
+
+on:
+  push:
+    branches:
+      - feature/guftin-advanced-calls-documents-security
+    paths:
+      - "apps/kingchat/**"
+      - ".github/workflows/guftin-github-local-apk.yml"
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: "Branch or commit to compile"
+        required: true
+        default: "feature/guftin-advanced-calls-documents-security"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guftin-github-android-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  android-apk:
+    name: Compile signed Guftin APK on GitHub runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: apps/kingchat
+
+    steps:
+      - name: Check out Guftin source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref || github.ref }}
+
+      - name: Verify Expo signing access is available
+        shell: bash
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::error::Missing GitHub Actions secret EXPO_TOKEN."
+            echo "Add the uu786 Expo Owner access token at:"
+            echo "Repository Settings > Secrets and variables > Actions > New repository secret."
+            echo "The token is used only to download the existing managed Android keystore; it is never printed."
+            exit 1
+          fi
+          echo "Owner token found. Its value will remain hidden."
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.23.3"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install the same Android native toolchain used by the EAS build
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;27.1.12297006" \
+            "cmake;3.22.1"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.1.12297006" >> "$GITHUB_ENV"
+
+      - name: Install Guftin dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Check Expo SDK dependency alignment
+        run: npx --yes expo install --check
+
+      - name: Run Expo Doctor
+        run: npx --yes expo-doctor@latest
+
+      - name: TypeScript validation
+        run: npm run typecheck
+
+      - name: Prepare launcher and splash assets
+        run: npm run prepare:assets
+
+      - name: Compile signed APK locally on the GitHub runner
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          CI: "1"
+          EAS_LOCAL_BUILD_SKIP_CLEANUP: "1"
+        shell: bash
+        run: |
+          mkdir -p dist
+          npx --yes eas-cli@latest build \
+            --platform android \
+            --profile production \
+            --local \
+            --non-interactive \
+            --freeze-credentials \
+            --output ./dist/Guftin-1.4.17-GitHub.apk
+          test -s ./dist/Guftin-1.4.17-GitHub.apk
+
+      - name: Verify APK package and cryptographic signature
+        shell: bash
+        run: |
+          APK="./dist/Guftin-1.4.17-GitHub.apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | head -n 1
+          sha256sum "$APK"
+          ls -lh "$APK"
+
+      - name: Upload GitHub-built APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Guftin-1.4.17-GitHub-APK
+          path: apps/kingchat/dist/Guftin-1.4.17-GitHub.apk
+          if-no-files-found: error
+          retention-days: 30
