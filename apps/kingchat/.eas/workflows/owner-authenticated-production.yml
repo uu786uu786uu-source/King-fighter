@@ -1,7 +1,7 @@
 name: Guftin Owner-authenticated Production APK
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 jobs:
   verify_and_build:
