@@ -1,6 +1,6 @@
 {
   "name": "guftin-mobile",
-  "version": "1.4.17",
+  "version": "1.4.18",
   "private": true,
   "main": "expo/AppEntry",
   "scripts": {
@@ -45,7 +45,8 @@
     "@config-plugins/react-native-callkeep": "12.0.0",
     "expo-task-manager": "~14.0.9",
     "expo-document-picker": "~14.0.8",
-    "expo-sharing": "~14.0.8"
+    "expo-sharing": "~14.0.8",
+    "expo-intent-launcher": "~13.0.8"
   },
   "devDependencies": {
     "@types/react": "~19.1.10",
