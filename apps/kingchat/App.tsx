@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import {
-  ActivityIndicator, Alert, AppState, BackHandler, FlatList, Image, KeyboardAvoidingView, Modal,
+  ActivityIndicator, Alert, AppState, BackHandler, FlatList, Image, KeyboardAvoidingView, Modal, NativeModules,
   Platform, RefreshControl, ScrollView, StatusBar, Switch, Text, TextInput, ToastAndroid,
   TouchableOpacity, View
 } from 'react-native';
@@ -160,11 +160,21 @@ const getDocumentMimeType=(name:string)=>{
 };
 const PERMISSION_SETUP_STEPS = [
   {key:'notifications',icon:'🔔',title:'Notifications',description:'Allow message alerts, status likes and views, and incoming voice/video call alerts while Guftin is in the background.'},
+  {key:'phoneAccount',icon:'📞',title:'Android calling account',description:'Enable Guftin in Android Phone accounts so the system can show the full incoming-call screen and native call controls.'},
+  {key:'fullScreenCalls',icon:'📲',title:'Full-screen incoming calls',description:'Allow Guftin to show the complete incoming-call screen over the lock screen and other apps. Android opens the special-access settings page.'},
   {key:'microphone',icon:'🎙️',title:'Microphone',description:'Allow the microphone for voice messages and voice/video calls.'},
   {key:'camera',icon:'📷',title:'Camera',description:'Allow the camera so you can join video calls and share camera video.'},
   {key:'photos',icon:'🖼️',title:'Photos and videos',description:'Allow photo and video access when you choose a profile picture, share media, or post a status.'},
   {key:'autoSave',icon:'💾',title:'Save received media to Gallery',description:'Choose whether new photos and videos you receive should be saved automatically to your phone gallery.'}
 ] as const;
+const canUseFullScreenCallIntent = async ():Promise<boolean> => {
+  if (Platform.OS !== 'android' || Number(Platform.Version) < 34) return true;
+  const bridge = (NativeModules as any).GuftinCallPermissions;
+  if (typeof bridge?.canUseFullScreenIntent !== 'function') {
+    throw new Error('The Android full-screen permission checker is missing. Install the latest Guftin build.');
+  }
+  return Boolean(await bridge.canUseFullScreenIntent());
+};
 const getExpoProjectId=()=>(
   (Constants as any).easConfig?.projectId||
   (Constants.expoConfig as any)?.extra?.eas?.projectId||
@@ -517,6 +527,8 @@ function GuftinApp() {
   const [permissionSetupBusy,setPermissionSetupBusy]=useState(false);
   const [permissionSetupAutoSave,setPermissionSetupAutoSave]=useState(true);
   const [permissionSetupNotice,setPermissionSetupNotice]=useState('');
+  const [permissionSetupAwaitingSystemSetting,setPermissionSetupAwaitingSystemSetting]=useState<string|null>(null);
+  const permissionSetupAwaitingSystemSettingRef=useRef<string|null>(null);
   const [themeName,setThemeName]=useState('emerald');
   const [deliveredByMessage,setDeliveredByMessage]=useState<Record<string,string>>({});
   const hiddenMessageIds=useRef(new Set<string>());
@@ -934,6 +946,49 @@ function GuftinApp() {
     };
   },[session?.user?.id,pushPermissionReady]);
 
+  // When Android Settings returns to Guftin, verify the exact system setting
+  // the user was sent to and advance only after Android confirms it is enabled.
+  useEffect(()=>{
+    if(Platform.OS!=='android')return;
+    let leftGuftin=false;
+    const subscription=AppState.addEventListener('change',nextState=>{
+      if(nextState!=='active'){
+        leftGuftin=true;
+        return;
+      }
+      if(!leftGuftin)return;
+      leftGuftin=false;
+      const pendingKey=permissionSetupAwaitingSystemSettingRef.current;
+      if(!pendingKey)return;
+      void (async()=>{
+        try{
+          const enabled=pendingKey==='phoneAccount'
+            ? await RNCallKeep.hasPhoneAccount()
+            : pendingKey==='fullScreenCalls'
+              ? await canUseFullScreenCallIntent()
+              : false;
+          permissionSetupAwaitingSystemSettingRef.current=null;
+          setPermissionSetupAwaitingSystemSetting(null);
+          if(enabled){
+            setPermissionSetupNotice(pendingKey==='phoneAccount'
+              ? 'Android calling account enabled successfully.'
+              : 'Full-screen incoming-call access enabled successfully.');
+            setPermissionSetupStep(current=>current+1);
+          }else{
+            setPermissionSetupNotice(pendingKey==='phoneAccount'
+              ? 'Guftin calling account is still OFF. Turn it ON in Android Phone accounts, then tap Allow again.'
+              : 'Full-screen access is still OFF. Enable Allow full-screen notifications in Android Settings, then tap Allow again.');
+          }
+        }catch(error:any){
+          permissionSetupAwaitingSystemSettingRef.current=null;
+          setPermissionSetupAwaitingSystemSetting(null);
+          setPermissionSetupNotice(error?.message||'Could not verify this Android setting. Tap Allow to open Settings again.');
+        }
+      })();
+    });
+    return ()=>subscription.remove();
+  },[session?.user?.id]);
+
   const enablePushNotifications=async()=>{
     if(!session||pushBusy)return;
     setPushBusy(true);
@@ -991,6 +1046,8 @@ function GuftinApp() {
     if(!session?.user?.id)return;
     try{await AsyncStorage.setItem('guftin-permission-setup-v1:'+session.user.id,'completed');}
     catch(error:any){console.warn('Could not save permission setup completion:',error?.message||error);}
+    permissionSetupAwaitingSystemSettingRef.current=null;
+    setPermissionSetupAwaitingSystemSetting(null);
     setPermissionSetupVisible(false);
     setPermissionSetupNotice('');
   };
@@ -1029,6 +1086,25 @@ function GuftinApp() {
             setPushEnabled(false);
             setPermissionSetupNotice(error?.message||'Android permission is allowed, but Expo/Firebase push registration still needs configuration.');
           }
+        }
+      }else if(step.key==='phoneAccount'){
+        await ensureCallKeepReady();
+        granted=await RNCallKeep.hasPhoneAccount();
+        if(!granted){
+          permissionSetupAwaitingSystemSettingRef.current='phoneAccount';
+          setPermissionSetupAwaitingSystemSetting('phoneAccount');
+          setPermissionSetupNotice('Opening Android Phone accounts. Enable Guftin there, then return here; Guftin will verify it automatically.');
+          await openPhoneAccountSettings();
+          return;
+        }
+      }else if(step.key==='fullScreenCalls'){
+        granted=await canUseFullScreenCallIntent();
+        if(!granted){
+          permissionSetupAwaitingSystemSettingRef.current='fullScreenCalls';
+          setPermissionSetupAwaitingSystemSetting('fullScreenCalls');
+          setPermissionSetupNotice('Opening Android Special app access. Turn on Allow full-screen notifications for Guftin, then return here; Guftin will verify it automatically.');
+          await openFullScreenCallSettings();
+          return;
         }
       }else if(step.key==='microphone'){
         const permission=await Audio.requestPermissionsAsync();
@@ -2618,7 +2694,7 @@ function GuftinApp() {
           <Text style={{color:C.muted,fontSize:12,marginTop:7,textAlign:'center'}}>Set your device permissions</Text>
         </View>
         <Text style={{fontSize:23,fontWeight:'900',color:C.ink,marginBottom:8}}>Allow the features you want</Text>
-        <Text style={{color:C.muted,fontSize:13,lineHeight:20,marginBottom:18}}>Guftin will ask one permission at a time. Press Allow to open the Android permission prompt, or Not now to skip it. You can change these choices later in Settings.</Text>
+        <Text style={{color:C.muted,fontSize:13,lineHeight:20,marginBottom:18}}>Guftin will ask one permission at a time. For Android call permissions, Allow opens the exact system settings page; after you enable the switch and return, Guftin verifies it automatically.</Text>
         <View style={{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
           <Text style={{fontSize:11,color:C.green,fontWeight:'900'}}>STEP {permissionSetupStep+1} OF {PERMISSION_SETUP_STEPS.length}</Text>
           <Text style={{fontSize:11,color:C.muted}}>{Math.round(((permissionSetupStep+1)/PERMISSION_SETUP_STEPS.length)*100)}%</Text>
@@ -2644,7 +2720,7 @@ function GuftinApp() {
             <Text style={{color:C.ink,fontWeight:'800'}}>Not now</Text>
           </Btn>
           <Btn disabled={permissionSetupBusy} onPress={()=>void requestPermissionSetupStep()} style={{flex:1,padding:15,borderRadius:14,alignItems:'center',backgroundColor:C.green}}>
-            {permissionSetupBusy?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'900'}}>{step.key==='autoSave'?'Save choice':'Allow'}</Text>}
+            {permissionSetupBusy?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'900'}}>{step.key==='autoSave'?'Save choice':step.key==='phoneAccount'||step.key==='fullScreenCalls'?'Allow / Open settings':'Allow'}</Text>}
           </Btn>
         </View>
         <Text style={{fontSize:10,color:C.muted,textAlign:'center',lineHeight:16,marginTop:18}}>Contacts and location permission are not needed for username-based Guftin chats. Android only grants access when you choose Allow.</Text>
