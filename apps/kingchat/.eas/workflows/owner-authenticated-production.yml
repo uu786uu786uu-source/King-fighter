@@ -1,0 +1,40 @@
+name: Guftin Owner-authenticated Production APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify_and_build:
+    name: Authenticate with Organization Owner token and build Guftin APK
+    environment: production
+    defaults:
+      run:
+        working_directory: .
+    steps:
+      - name: Check out Guftin source
+        uses: eas/checkout
+
+      - name: Verify Owner token is injected from Expo production secrets
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "EXPO_TOKEN is not available in this production workflow environment."
+            exit 1
+          fi
+          echo "EXPO_TOKEN is present; value is intentionally hidden."
+
+      - name: Verify Expo account identity
+        run: npx --yes eas-cli@latest whoami
+
+      - name: Verify linked Guftin project access
+        run: npx --yes eas-cli@latest project:info
+
+      - name: Validate TypeScript
+        run: |
+          npm install --no-audit --no-fund
+          npm run typecheck
+
+      - name: Prepare app assets
+        run: npm run prepare:assets
+
+      - name: Start signed Android production APK build
+        run: npx --yes eas-cli@latest build --platform android --profile production --non-interactive --no-wait
