@@ -1008,23 +1008,27 @@ function GuftinApp() {
     try{
       if(!session||!deviceIdentity||e2eeStatus!=='ready')throw new Error('This phone is not ready for encrypted calling. Open Guftin again and make sure secure chat is ready.');
       const {data:callRecord,error:callRecordError}=await supabase.from('kc_call_logs')
-        .select('id,conversation_id,caller_id,callee_id,call_type,status,e2ee_key_envelopes')
+        .select('id,conversation_id,caller_id,callee_id,call_type,status,call_scope,e2ee_key_envelopes')
         .eq('id',call.id).maybeSingle();
       if(callRecordError)throw callRecordError;
       if(!callRecord||callRecord.status!=='accepted')throw new Error('The call is no longer accepted.');
+      const callScope=callRecord.call_scope||'direct';
+      if(callScope==='group'){
+        const {data:participant,error:participantError}=await supabase.from('kc_call_participants')
+          .select('status').eq('call_id',call.id).eq('user_id',session.user.id).maybeSingle();
+        if(participantError)throw participantError;
+        if(!participant||participant.status!=='accepted')throw new Error('Accept this group call before joining.');
+      }
       const e2eeKey=decryptCallKeyForDevice(callRecord.e2ee_key_envelopes,deviceIdentity);
       const {data,error}=await supabase.functions.invoke('livekit-token',{body:{call_id:call.id}});
       if(error)throw error;
       if(!data?.server_url||!data?.participant_token)throw new Error(data?.error||'The LiveKit token endpoint is not ready.');
-      setLiveCall({id:call.id,callType:callRecord.call_type,serverUrl:data.server_url,token:data.participant_token,e2eeKey});
+      setLiveCall({id:call.id,callType:callRecord.call_type,callScope,serverUrl:data.server_url,token:data.participant_token,e2eeKey});
       if(Platform.OS==='android')RNCallKeep.setCurrentCallActive(call.id);
       setIncomingCall(null);
       setOutgoingCall(null);
     }catch(e:any){
       let details=e?.message||'LiveKit credentials are missing or the call is no longer active.';
-      // Supabase FunctionsHttpError keeps the function's JSON response in context.
-      // Show the real server reason (e.g. missing LiveKit secrets) instead of the
-      // generic "non-2xx status code" message.
       try{
         const response=e?.context;
         if(response&&typeof response.clone==='function'){
@@ -1034,7 +1038,7 @@ function GuftinApp() {
             details+=' Missing secrets: '+body.missing.filter((name:any)=>typeof name==='string').join(', ')+'.';
           }
         }
-      }catch{ /* Fall back to the SDK message if the response has no JSON body. */ }
+      }catch{}
       Alert.alert('Call could not connect',details);
       await supabase.from('kc_call_logs').update({status:'ended',ended_at:new Date().toISOString()}).eq('id',call.id);
       setIncomingCall(null);
@@ -1046,6 +1050,14 @@ function GuftinApp() {
 
   const respondToCall=useCallback(async(call:any,status:'accepted'|'declined')=>{
     if(!session||!call?.id)return;
+    if((call.call_scope||'direct')==='group'){
+      const {error}=await supabase.rpc('kc_answer_group_call',{p_call_id:call.id,p_status:status});
+      if(error){Alert.alert('Group call action failed',error.message);return;}
+      setIncomingCall(null);
+      if(status==='accepted')await joinCall({...call,status:'accepted'});
+      else setOutgoingCall(null);
+      return;
+    }
     const update:any={status};
     if(status==='accepted')update.started_at=new Date().toISOString();
     else update.ended_at=new Date().toISOString();
@@ -1764,8 +1776,8 @@ function GuftinApp() {
       Alert.alert('Secure calling not ready','Open Guftin on both phones and wait until secure chat is ready before starting a call.');
       return;
     }
-    if(active.kind!=='direct'){
-      Alert.alert('Direct calls only','Group calls are not enabled in this first calling build.');
+    if(!['direct','group'].includes(active.kind)){
+      Alert.alert('Calling unavailable','Calls are available in direct chats and groups.');
       return;
     }
     setCallBusy(true);
@@ -1774,14 +1786,19 @@ function GuftinApp() {
         .select('user_id').eq('conversation_id',active.id);
       if(memberError)throw memberError;
       const memberIds=[...new Set((members||[]).map((row:any)=>row.user_id))] as string[];
-      const peers=memberIds.filter((id:string)=>id!==session.user.id);
-      if(peers.length!==1||memberIds.length!==2)throw new Error('This call needs exactly one other member in the direct chat.');
+      if(!memberIds.includes(session.user.id))throw new Error('You are no longer a member of this conversation.');
+      if(active.kind==='direct'&&(memberIds.length!==2||memberIds.filter(id=>id!==session.user.id).length!==1))
+        throw new Error('This direct call needs exactly one other member.');
+      if(active.kind==='group'&&(memberIds.length<2||memberIds.length>20))
+        throw new Error('Group calls need 2–20 group members, including you.');
       const {data:devices,error:devicesError}=await supabase.from('kc_e2ee_devices')
         .select('id,user_id,public_key').in('user_id',memberIds).is('revoked_at',null);
       if(devicesError)throw devicesError;
       const registeredUsers=new Set((devices||[]).map((device:any)=>device.user_id));
-      if(memberIds.some(id=>!registeredUsers.has(id)))throw new Error('Both users must open the latest Guftin version before making an encrypted call.');
-      if(!(devices||[]).some((device:any)=>device.id===deviceIdentity.deviceId))throw new Error('This phone is not in the conversation encryption roster. Reopen Guftin and try again.');
+      if(memberIds.some((id:string)=>!registeredUsers.has(id)))
+        throw new Error('Every participant must open the latest Guftin version and register a secure device before this encrypted call can start.');
+      if(!(devices||[]).some((device:any)=>device.id===deviceIdentity.deviceId))
+        throw new Error('This phone is not in the conversation encryption roster. Reopen Guftin and try again.');
       const callKey=ExpoCrypto.getRandomBytes(32);
       let e2eeKeyEnvelopes:any;
       try{
@@ -1789,18 +1806,36 @@ function GuftinApp() {
       }finally{
         callKey.fill(0);
       }
-      const {data,error}=await supabase.from('kc_call_logs').insert({
-        conversation_id:active.id,
-        caller_id:session.user.id,
-        callee_id:peers[0],
-        call_type:callType,
-        status:'ringing',
-        e2ee_key_envelopes:e2eeKeyEnvelopes
-      }).select('id,conversation_id,caller_id,callee_id,call_type,status').single();
-      if(error)throw error;
-      setOutgoingCall(data);
-      void dispatchPush('call',data.id);
-      Alert.alert('Calling','Calling '+active.name+'. Keep Guftin open while they answer.');
+      let call:any;
+      if(active.kind==='group'){
+        const {data,error}=await supabase.rpc('kc_create_group_call',{
+          p_conversation_id:active.id,
+          p_call_type:callType,
+          p_e2ee_key_envelopes:e2eeKeyEnvelopes
+        });
+        if(error)throw error;
+        const callId=typeof data==='string'?data:(Array.isArray(data)?data[0]:data);
+        if(!callId)throw new Error('The group call was created but the call ID was not returned.');
+        call={id:callId,conversation_id:active.id,caller_id:session.user.id,call_type:callType,status:'ringing',call_scope:'group'};
+      }else{
+        const peer=memberIds.find(id=>id!==session.user.id);
+        const {data,error}=await supabase.from('kc_call_logs').insert({
+          conversation_id:active.id,
+          caller_id:session.user.id,
+          callee_id:peer,
+          call_type:callType,
+          status:'ringing',
+          call_scope:'direct',
+          e2ee_key_envelopes:e2eeKeyEnvelopes
+        }).select('id,conversation_id,caller_id,callee_id,call_type,status,call_scope').single();
+        if(error)throw error;
+        call=data;
+      }
+      setOutgoingCall(call);
+      void dispatchPush('call',call.id);
+      Alert.alert(active.kind==='group'?'Group call started':'Calling',active.kind==='group'
+        ?'Your group has been invited. Members can join as they answer.'
+        :'Calling '+active.name+'. Keep Guftin open while they answer.');
     }catch(e:any){
       Alert.alert('Call could not start',e?.message||'Please try again.');
     }finally{
@@ -1809,7 +1844,13 @@ function GuftinApp() {
   };
 
   const endCall=async(callId:string,fromNative=false)=>{
-    await supabase.from('kc_call_logs').update({status:'ended',ended_at:new Date().toISOString()}).eq('id',callId);
+    const endingGroup=liveCall?.id===callId&&liveCall?.callScope==='group';
+    if(endingGroup){
+      const {error}=await supabase.rpc('kc_leave_group_call',{p_call_id:callId});
+      if(error)Alert.alert('Could not leave group call',error.message);
+    }else{
+      await supabase.from('kc_call_logs').update({status:'ended',ended_at:new Date().toISOString()}).eq('id',callId);
+    }
     if(!fromNative&&Platform.OS==='android')RNCallKeep.endCall(callId);
     setLiveCall(null);
     setOutgoingCall(null);
