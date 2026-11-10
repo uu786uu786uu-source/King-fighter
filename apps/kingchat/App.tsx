@@ -2127,6 +2127,10 @@ function GuftinApp() {
     }
     const actionKey=callUUID+':'+action;
     if(processedNativeCallActions.current.has(actionKey))return;
+    if(action==='answer'&&Platform.OS==='android'){
+      try{await RNCallKeep.backToForeground();}
+      catch(foregroundError:any){console.warn('Could not bring Guftin to foreground after call answer:',foregroundError?.message||foregroundError);}
+    }
     processedNativeCallActions.current.add(actionKey);
     try{
       const {data:call,error}=await supabase.from('kc_call_logs')
