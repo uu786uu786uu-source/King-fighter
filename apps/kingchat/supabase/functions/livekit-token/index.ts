@@ -30,6 +30,14 @@ function getPublishableKey(): string | null {
   return null;
 }
 
+function firstConfiguredEnv(names: string[]): string {
+  for (const name of names) {
+    const value = (Deno.env.get(name) || "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -72,28 +80,58 @@ Deno.serve(async (req: Request) => {
 
   const { data: call, error: callError } = await supabase
     .from("kc_call_logs")
-    .select("id, conversation_id, caller_id, callee_id, call_type, status")
+    .select("id, conversation_id, caller_id, callee_id, call_type, status, call_scope")
     .eq("id", callId)
     .maybeSingle();
 
   if (callError || !call) {
     return json({ error: "Call was not found or you are not a participant." }, 404);
   }
-  if (call.caller_id !== user.id && call.callee_id !== user.id) {
-    return json({ error: "You are not a participant in this call." }, 403);
-  }
   if (call.status !== "accepted") {
     return json({ error: "The call must be accepted before joining." }, 409);
   }
+  if (call.call_scope === "group") {
+    const { data: participant, error: participantError } = await supabase
+      .from("kc_call_participants")
+      .select("status")
+      .eq("call_id", call.id)
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (participantError || !participant || participant.status !== "accepted") {
+      return json({ error: "You are not an accepted participant in this group call." }, 403);
+    }
+  } else if (call.caller_id !== user.id && call.callee_id !== user.id) {
+    return json({ error: "You are not a participant in this call." }, 403);
+  }
 
   // Read the three server-only LiveKit secrets. Never return their values.
-  const rawLivekitUrl = (Deno.env.get("LIVEKIT_URL") || "").trim();
-  const apiKey = (Deno.env.get("LIVEKIT_API_KEY") || "").trim();
-  const apiSecret = (Deno.env.get("LIVEKIT_API_SECRET") || "").trim();
+  // Accept canonical LiveKit names plus the labels already configured by the project owner.
+  // Values are used only on the server and are never returned to the client.
+  const rawLivekitUrl = firstConfiguredEnv([
+    "LIVEKIT_URL",
+    "LIVEKIT_WEBSOCKET_URL",
+    "WEBSOCKET_URL",
+    "Websocket URL",
+    "WebSocket URL",
+  ]);
+  const apiKey = firstConfiguredEnv([
+    "LIVEKIT_API_KEY",
+    "LIVEKIT_KEY",
+    "API_KEY",
+    "API key",
+    "API KEY",
+  ]);
+  const apiSecret = firstConfiguredEnv([
+    "LIVEKIT_API_SECRET",
+    "LIVEKIT_SECRET",
+    "API_SECRET",
+    "API secret",
+    "API SECRET",
+  ]);
   const missing = [
-    !rawLivekitUrl ? "LIVEKIT_URL" : null,
-    !apiKey ? "LIVEKIT_API_KEY" : null,
-    !apiSecret ? "LIVEKIT_API_SECRET" : null,
+    !rawLivekitUrl ? "LIVEKIT_URL / Websocket URL" : null,
+    !apiKey ? "LIVEKIT_API_KEY / API key" : null,
+    !apiSecret ? "LIVEKIT_API_SECRET / API secret" : null,
   ].filter(Boolean) as string[];
   if (missing.length) {
     return json({
