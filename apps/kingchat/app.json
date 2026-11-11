@@ -2,13 +2,13 @@
   "expo": {
     "name": "Guftin",
     "slug": "guftin",
-    "version": "1.4.11",
+    "version": "1.4.19",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "scheme": "kingchat",
     "android": {
       "package": "com.guftin.app",
-      "versionCode": 16,
+      "versionCode": 24,
       "adaptiveIcon": {
         "foregroundImage": "./assets/guftin-icon.png",
         "backgroundColor": "#031522"
