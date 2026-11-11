@@ -113,13 +113,34 @@ TaskManager.defineTask(CALL_BACKGROUND_TASK, async ({data,error}:any) => {
     return;
   }
   try {
+    // Expo's NotificationTaskPayload wraps the remote JSON under "data".
+    // Also support Notification objects and older dataString payloads.
     const taskData:any = data || {};
-    const embedded = taskData?.data?.dataString ??
-      taskData?.dataString ??
-      taskData?.notification?.request?.content?.data;
-    const payload = typeof embedded === 'string' ? JSON.parse(embedded) : embedded;
-    if (payload?.type === 'incoming_call' && typeof payload.call_id === 'string') {
+    const candidates = [
+      taskData?.data,
+      taskData?.data?.data,
+      taskData?.data?.notification?.request?.content?.data,
+      taskData?.notification?.request?.content?.data,
+      taskData?.request?.content?.data,
+      taskData?.dataString
+    ];
+    let payload:any = null;
+    for (const candidate of candidates) {
+      if (candidate == null) continue;
+      try {
+        const decoded = typeof candidate === 'string' ? JSON.parse(candidate) : candidate;
+        const possible = decoded?.data && typeof decoded.data === 'object' ? decoded.data : decoded;
+        if (possible?.type === 'incoming_call' && typeof possible.call_id === 'string') {
+          payload = possible;
+          break;
+        }
+      } catch {}
+    }
+    if (payload) {
+      console.log('Guftin background incoming-call payload received.');
       await presentNativeIncomingCall(payload);
+    } else {
+      console.warn('Incoming-call task ran without a usable call payload. Keys:', Object.keys(taskData || {}));
     }
   } catch (taskError:any) {
     console.warn('Could not process incoming-call background payload:', taskError?.message || taskError);
@@ -2175,22 +2196,12 @@ function GuftinApp() {
         if(error)throw error;
         call=data;
       }
+      // Use Guftin's own full-screen outgoing call page. Calling
+      // RNCallKeep.startCall here also launches the generic Android Telecom
+      // outgoing flow and can cover the app's custom call screen.
+      setIncomingCall(null);
       setOutgoingCall({...call,contact_name:active.name,contact_avatar:active.avatar});
       void dispatchPush('call',call.id);
-      if(Platform.OS==='android'){
-        void (async()=>{
-          try{
-            await ensureCallKeepReady();
-            if(await RNCallKeep.hasPhoneAccount()){
-              await RNCallKeep.startCall(call.id,active.id,active.name);
-            }else{
-              console.warn('Native outgoing call screen is unavailable until the Guftin phone account is enabled.');
-            }
-          }catch(nativeCallError:any){
-            console.warn('Native outgoing call registration failed:',nativeCallError?.message||nativeCallError);
-          }
-        })();
-      }
     }catch(e:any){
       Alert.alert('Call could not start',e?.message||'Please try again.');
     }finally{
