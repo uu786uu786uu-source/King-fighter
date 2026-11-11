@@ -117,6 +117,7 @@ TaskManager.defineTask(CALL_BACKGROUND_TASK, async ({data,error}:any) => {
     // Also support Notification objects and older dataString payloads.
     const taskData:any = data || {};
     const candidates = [
+      taskData?.data?.dataString,
       taskData?.data,
       taskData?.data?.data,
       taskData?.data?.notification?.request?.content?.data,
