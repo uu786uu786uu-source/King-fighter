@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import {
-  ActivityIndicator, Alert, AppState, BackHandler, FlatList, Image, KeyboardAvoidingView, Modal, NativeModules,
+  ActivityIndicator, Alert, AppState, BackHandler, FlatList, Image, KeyboardAvoidingView, Modal,
   Platform, RefreshControl, ScrollView, StatusBar, Switch, Text, TextInput, ToastAndroid,
   TouchableOpacity, View
 } from 'react-native';
@@ -147,9 +147,22 @@ TaskManager.defineTask(CALL_BACKGROUND_TASK, async ({data,error}:any) => {
     console.warn('Could not process incoming-call background payload:', taskError?.message || taskError);
   }
 });
-void Notifications.registerTaskAsync(CALL_BACKGROUND_TASK).catch(error =>
-  console.warn('Could not register incoming-call background task:', error?.message || error)
-);
+let callBackgroundTaskRegistration:Promise<void>|null=null;
+const registerIncomingCallBackgroundTask=()=>{
+  if(Platform.OS!=='android')return Promise.resolve();
+  if(!callBackgroundTaskRegistration){
+    callBackgroundTaskRegistration=(async()=>{
+      try{
+        const registered=await TaskManager.isTaskRegisteredAsync(CALL_BACKGROUND_TASK);
+        if(!registered)await Notifications.registerTaskAsync(CALL_BACKGROUND_TASK);
+      }catch(error:any){
+        callBackgroundTaskRegistration=null;
+        console.warn('Could not register incoming-call background task:',error?.message||error);
+      }
+    })();
+  }
+  return callBackgroundTaskRegistration;
+};
 
 
 let C:any = { ink:'#102b27', muted:'#82938e', green:'#087e6c', mint:'#e5f5ee', paper:'#f5f8f6', white:'#fff', line:'#e9efec', red:'#b94e48' };
@@ -191,14 +204,6 @@ const PERMISSION_SETUP_STEPS = [
   {key:'photos',icon:'🖼️',title:'Photos and videos',description:'Allow photo and video access when you choose a profile picture, share media, or post a status.'},
   {key:'autoSave',icon:'💾',title:'Save received media to Gallery',description:'Choose whether new photos and videos you receive should be saved automatically to your phone gallery.'}
 ] as const;
-const canUseFullScreenCallIntent = async ():Promise<boolean> => {
-  if (Platform.OS !== 'android' || Number(Platform.Version) < 34) return true;
-  const bridge = (NativeModules as any).GuftinCallPermissions;
-  if (typeof bridge?.canUseFullScreenIntent !== 'function') {
-    throw new Error('The Android full-screen permission checker is missing. Install the latest Guftin build.');
-  }
-  return Boolean(await bridge.canUseFullScreenIntent());
-};
 const getExpoProjectId=()=>(
   (Constants as any).easConfig?.projectId||
   (Constants.expoConfig as any)?.extra?.eas?.projectId||
@@ -507,6 +512,9 @@ function GuftinApp() {
   const flushingPendingMessages=useRef(false);
   const flushingPendingMedia=useRef(false);
   const onlineRef=useRef(true);
+  useEffect(()=>{
+    void registerIncomingCallBackgroundTask();
+  },[]);
   useEffect(()=>{
     activeConversationIdRef.current=active?.id||null;
   },[active?.id]);
@@ -970,8 +978,9 @@ function GuftinApp() {
     };
   },[session?.user?.id,pushPermissionReady]);
 
-  // When Android Settings returns to Guftin, verify the exact system setting
-  // the user was sent to and advance only after Android confirms it is enabled.
+  // Verify the Android Phone Account when returning from Settings. Android's
+  // full-screen special-access toggle is confirmed by the user in Settings;
+  // avoid a custom native bridge being loaded during app startup for that check.
   useEffect(()=>{
     if(Platform.OS!=='android')return;
     let leftGuftin=false;
@@ -988,20 +997,17 @@ function GuftinApp() {
         try{
           const enabled=pendingKey==='phoneAccount'
             ? await RNCallKeep.hasPhoneAccount()
-            : pendingKey==='fullScreenCalls'
-              ? await canUseFullScreenCallIntent()
-              : false;
+            : pendingKey==='fullScreenCalls';
           permissionSetupAwaitingSystemSettingRef.current=null;
           setPermissionSetupAwaitingSystemSetting(null);
-          if(enabled){
-            setPermissionSetupNotice(pendingKey==='phoneAccount'
-              ? 'Android calling account enabled successfully.'
-              : 'Full-screen incoming-call access enabled successfully.');
+          if(pendingKey==='fullScreenCalls'){
+            setPermissionSetupNotice('Returned from Android settings. Confirm that Allow full-screen notifications is ON, then continue.');
+            setPermissionSetupStep(current=>current+1);
+          }else if(enabled){
+            setPermissionSetupNotice('Android calling account enabled successfully.');
             setPermissionSetupStep(current=>current+1);
           }else{
-            setPermissionSetupNotice(pendingKey==='phoneAccount'
-              ? 'Guftin calling account is still OFF. Turn it ON in Android Phone accounts, then tap Allow again.'
-              : 'Full-screen access is still OFF. Enable Allow full-screen notifications in Android Settings, then tap Allow again.');
+            setPermissionSetupNotice('Guftin calling account is still OFF. Turn it ON in Android Phone accounts, then tap Allow again.');
           }
         }catch(error:any){
           permissionSetupAwaitingSystemSettingRef.current=null;
@@ -1122,14 +1128,11 @@ function GuftinApp() {
           return;
         }
       }else if(step.key==='fullScreenCalls'){
-        granted=await canUseFullScreenCallIntent();
-        if(!granted){
-          permissionSetupAwaitingSystemSettingRef.current='fullScreenCalls';
-          setPermissionSetupAwaitingSystemSetting('fullScreenCalls');
-          setPermissionSetupNotice('Opening Android Special app access. Turn on Allow full-screen notifications for Guftin, then return here; Guftin will verify it automatically.');
-          await openFullScreenCallSettings();
-          return;
-        }
+        permissionSetupAwaitingSystemSettingRef.current='fullScreenCalls';
+        setPermissionSetupAwaitingSystemSetting('fullScreenCalls');
+        setPermissionSetupNotice('Opening Android Special app access. Turn ON Allow full-screen notifications for Guftin, then return here and continue.');
+        await openFullScreenCallSettings();
+        return;
       }else if(step.key==='microphone'){
         const permission=await Audio.requestPermissionsAsync();
         granted=permission.granted;canAskAgain=permission.canAskAgain;
