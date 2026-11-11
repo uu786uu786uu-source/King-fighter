@@ -34,7 +34,7 @@ module.exports = ({ config }) => ({
   },
   name: "Guftin",
   slug: "guftin-",
-  version: "1.4.18",
+  version: "1.4.19",
   orientation: "portrait",
   userInterfaceStyle: "light",
   // Keep the app deep-link scheme for Guftin links and email auth callbacks.
@@ -43,7 +43,7 @@ module.exports = ({ config }) => ({
   android: {
     ...config.android,
     package: "com.guftin.app",
-    versionCode: 23,
+    versionCode: 24,
     // Add the Firebase Android client config when the owner supplies it.
     ...(fs.existsSync(path.join(__dirname, "google-services.json"))
       ? { googleServicesFile: "./google-services.json" }
