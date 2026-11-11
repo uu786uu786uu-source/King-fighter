@@ -59,6 +59,26 @@ jobs:
         run: |
           cd android
           gradle --no-daemon assembleRelease
+      - name: Verify existing Guftin install signing certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="./android/app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::Android apksigner was not found; refusing to upload an unverified APK."
+            exit 1
+          fi
+          SIGNATURE_OUTPUT="$("$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1)"
+          printf '%s\n' "$SIGNATURE_OUTPUT"
+          ACTUAL_FINGERPRINT="$(printf '%s\n' "$SIGNATURE_OUTPUT" | sed -n 's/.*Signer #1 certificate SHA-256 digest: //p' | head -n 1 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          EXPECTED_FINGERPRINT="fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c"
+          if [ "$ACTUAL_FINGERPRINT" != "$EXPECTED_FINGERPRINT" ]; then
+            echo "::error::APK signing certificate does not match the existing Guftin installation. Expected $EXPECTED_FINGERPRINT but got ${ACTUAL_FINGERPRINT:-none}. APK will not be uploaded."
+            exit 1
+          fi
+          echo "APK signing certificate matches the existing Guftin GitHub build."
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
