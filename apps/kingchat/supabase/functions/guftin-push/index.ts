@@ -186,6 +186,9 @@ Deno.serve(async (req: Request) => {
           : {}),
       }),
       priority: "high",
+      // Mark call pushes as background-capable. Android still receives a
+      // data-only high-priority message so the headless task can call CallKeep.
+      ...(body.kind === "call" ? { contentAvailable: true } : {}),
       ...(ttl ? { ttl } : {}),
       data,
     };
