@@ -109,15 +109,17 @@ jobs:
           disable-animations: true
           script: |
             set -eu
-            APK="android/app/build/outputs/apk/release/app-release.apk"
-            trap 'adb logcat -d -v threadtime > startup-smoke-logcat.txt 2>/dev/null || true' EXIT
+            APK="$GITHUB_WORKSPACE/apps/kingchat/android/app/build/outputs/apk/release/app-release.apk"
+            LOG="$GITHUB_WORKSPACE/apps/kingchat/startup-smoke-logcat.txt"
+            trap 'adb logcat -d -v threadtime > "$LOG" 2>/dev/null || true' EXIT
             test -s "$APK"
+            ls -lh "$APK"
             adb wait-for-device
-            adb install -r "$APK"
+            timeout 180s adb install -r "$APK"
             adb logcat -c
-            adb shell monkey -p com.guftin.app -c android.intent.category.LAUNCHER 1
+            timeout 30s adb shell monkey -p com.guftin.app -c android.intent.category.LAUNCHER 1
             sleep 25
-            adb logcat -d -v threadtime > startup-smoke-logcat.txt
+            adb logcat -d -v threadtime > "$LOG"
             PID="$(adb shell pidof -s com.guftin.app | tr -d '\\r' || true)"
             if [ -z "$PID" ]; then
               echo "::error::Guftin exited during Android emulator startup. See startup-smoke-logcat.txt."
