@@ -92,6 +92,43 @@ jobs:
             exit 1
           fi
           echo "APK signing certificate matches the existing Guftin GitHub build."
+      - name: Smoke test installed APK on Android emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            APK="android/app/build/outputs/apk/release/app-release.apk"
+            test -s "$APK"
+            adb wait-for-device
+            adb install -r "$APK"
+            adb logcat -c
+            adb shell monkey -p com.guftin.app -c android.intent.category.LAUNCHER 1
+            sleep 25
+            adb logcat -d -v threadtime > startup-smoke-logcat.txt
+            PID="$(adb shell pidof -s com.guftin.app | tr -d '\\r' || true)"
+            if [ -z "$PID" ]; then
+              echo "::error::Guftin exited during Android emulator startup. See startup-smoke-logcat.txt."
+              exit 1
+            fi
+            if grep -Eq 'FATAL EXCEPTION|Fatal signal [0-9]+' startup-smoke-logcat.txt; then
+              echo "::error::Android runtime reported a fatal startup exception. See startup-smoke-logcat.txt."
+              exit 1
+            fi
+            echo "Guftin remained alive after a fresh Android 15 launch (PID $PID)."
+      - name: Upload Android startup smoke log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: guftin-android-startup-smoke-log
+          path: apps/kingchat/startup-smoke-logcat.txt
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
