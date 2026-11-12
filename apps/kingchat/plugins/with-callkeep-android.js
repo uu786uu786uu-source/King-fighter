@@ -56,7 +56,6 @@ module.exports = function withCallKeepAndroidPermissions(config) {
       }
       const insertionPoint = superIndex + superCall.length;
       contents = contents.slice(0, insertionPoint) + "\n    " + setupLine + contents.slice(insertionPoint);
-      contents = contents.replace(onCreateStart, "$1\n    " + setupLine);
     }
 
     config.modResults.contents = contents;
