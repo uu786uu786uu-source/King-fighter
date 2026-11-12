@@ -8,7 +8,7 @@
     "scheme": "kingchat",
     "android": {
       "package": "com.guftin.app",
-      "newArchEnabled": false,
+      "newArchEnabled": true,
       "versionCode": 28,
       "adaptiveIcon": {
         "foregroundImage": "./assets/guftin-icon.png",
