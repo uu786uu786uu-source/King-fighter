@@ -25,7 +25,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - name: Check push project configuration
         env:
           EXPO_PUBLIC_EAS_PROJECT_ID: ${{ vars.EXPO_PUBLIC_EAS_PROJECT_ID || secrets.EXPO_PUBLIC_EAS_PROJECT_ID || '814cd723-8bea-4288-84b5-d489fdb37269' }}
@@ -50,6 +50,15 @@ jobs:
           CI: 1
           EXPO_PUBLIC_EAS_PROJECT_ID: ${{ vars.EXPO_PUBLIC_EAS_PROJECT_ID || secrets.EXPO_PUBLIC_EAS_PROJECT_ID || '814cd723-8bea-4288-84b5-d489fdb37269' }}
         run: npx expo prebuild --platform android
+      - name: Verify Android architecture and CallKeep dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fxq 'newArchEnabled=false' android/gradle.properties
+          node -e 'const p=require("react-native-callkeep/package.json"); console.log("CallKeep version:", p.version); if (p.version !== "4.6.1") process.exit(1);'
+          CALLKEEP_SOURCE="node_modules/react-native-callkeep/android/src/main/java/io/wazo/callkeep/RNCallKeepModule.java"
+          test -s "$CALLKEEP_SOURCE"
+          echo "Android legacy bridge is explicitly selected; CallKeep native source is present."
       - name: Verify LiveKit Android startup initialization
         shell: bash
         run: |
