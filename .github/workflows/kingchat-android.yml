@@ -108,8 +108,9 @@ jobs:
           emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
           disable-animations: true
           script: |
-            set -euo pipefail
+            set -eu
             APK="android/app/build/outputs/apk/release/app-release.apk"
+            trap 'adb logcat -d -v threadtime > startup-smoke-logcat.txt 2>/dev/null || true' EXIT
             test -s "$APK"
             adb wait-for-device
             adb install -r "$APK"
