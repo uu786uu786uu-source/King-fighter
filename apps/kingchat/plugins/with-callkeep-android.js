@@ -47,10 +47,15 @@ module.exports = function withCallKeepAndroidPermissions(config) {
         );
       }
 
-      const onCreateStart = /(override\\s+fun\\s+onCreate\\(\\)\\s*\\{\\s*super\\.onCreate\\(\\))/;
-      if (!onCreateStart.test(contents)) {
+      const onCreateAnchor = "override fun onCreate() {";
+      const superCall = "super.onCreate()";
+      const onCreateIndex = contents.indexOf(onCreateAnchor);
+      const superIndex = onCreateIndex >= 0 ? contents.indexOf(superCall, onCreateIndex) : -1;
+      if (onCreateIndex < 0 || superIndex < 0) {
         throw new Error("Guftin could not safely insert LiveKit setup into MainApplication.onCreate().");
       }
+      const insertionPoint = superIndex + superCall.length;
+      contents = contents.slice(0, insertionPoint) + "\n    " + setupLine + contents.slice(insertionPoint);
       contents = contents.replace(onCreateStart, "$1\n    " + setupLine);
     }
 
