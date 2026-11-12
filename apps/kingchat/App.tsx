@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import {
-  ActivityIndicator, Alert, AppState, BackHandler, FlatList, Image, KeyboardAvoidingView, Modal,
+  ActivityIndicator, Alert, Animated, AppState, BackHandler, FlatList, Image, KeyboardAvoidingView, Modal,
   Platform, RefreshControl, ScrollView, StatusBar, Switch, Text, TextInput, ToastAndroid,
   TouchableOpacity, View
 } from 'react-native';
@@ -18,7 +18,6 @@ import { Audio } from 'expo-av';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
-import * as IntentLauncher from 'expo-intent-launcher';
 import RNCallKeep from 'react-native-callkeep';
 import mobileAds, { BannerAd, BannerAdSize, MaxAdContentRating, TestIds } from 'react-native-google-mobile-ads';
 import { File, Paths } from 'expo-file-system';
@@ -42,10 +41,11 @@ const ensureCallKeepReady=()=>{
         ios:{appName:'Guftin'},
         android:{
           alertTitle:'Enable Guftin call screen',
-          alertDescription:'Allow Guftin to show incoming calls and answer them from the phone call screen.',
+          alertDescription:'Allow Guftin to manage its own secure voice and video calls.',
           cancelButton:'Later',
           okButton:'Continue',
           additionalPermissions:[],
+          selfManaged:true,
           foregroundService:{
             channelId:'guftin-call-service',
             channelName:'Guftin active calls',
@@ -69,12 +69,11 @@ const presentNativeIncomingCall = async (payload:any) => {
     ? payload.caller_name.trim() : 'Guftin contact';
   const callType = payload?.call_type === 'video' ? 'video' : 'voice';
   const isGroupCall = payload?.call_scope === 'group';
+
+  // Register the call as self-managed: Android Telecom tracks call lifecycle,
+  // but Guftin owns the incoming/outgoing interface instead of the Phone app.
   try {
-    // Use Android Telecom in every app state so native ringtone, lock-screen
-    // call UI, and system Answer/Decline controls stay consistent.
     await ensureCallKeepReady();
-    const phoneAccountEnabled = await RNCallKeep.hasPhoneAccount();
-    if (!phoneAccountEnabled) throw new Error('Guftin calling account is not enabled in Android Phone accounts.');
     await RNCallKeep.displayIncomingCall(
       callId,
       String(payload?.caller_id || callerName),
@@ -83,26 +82,35 @@ const presentNativeIncomingCall = async (payload:any) => {
       callType === 'video'
     );
   } catch (error:any) {
-    console.warn('Native incoming-call UI failed:', error?.message || error);
+    console.warn('Guftin self-managed call registration failed:', error?.message || error);
+  }
+
+  // If Guftin is not visible, post its own branded alert. Tapping it or the
+  // Accept/Decline actions returns to Guftin's custom call screen.
+  if (AppState.currentState !== 'active') {
     try {
       await Notifications.scheduleNotificationAsync({
         content: {
-          title: isGroupCall ? (callType === 'video' ? 'Incoming group video call' : 'Incoming group voice call') : (callType === 'video' ? 'Incoming video call' : 'Incoming voice call'),
-          body: callerName + (isGroupCall ? ' started a group call. Tap to join.' : ' is calling you. Tap to answer.'),
+          title: isGroupCall
+            ? (callType === 'video' ? 'Incoming group video call' : 'Incoming group voice call')
+            : (callType === 'video' ? 'Incoming video call' : 'Incoming voice call'),
+          body: callerName + (isGroupCall ? ' started a group call. Tap to join.' : ' is calling you.'),
           sound: 'default',
           categoryIdentifier: 'guftin_incoming_call',
+          sticky: true,
           data: {
             type: 'incoming_call',
             call_id: callId,
-            call_type: callType,
+            caller_id: String(payload?.caller_id || ''),
             caller_name: callerName,
+            call_type: callType,
             call_scope: isGroupCall ? 'group' : 'direct'
           }
         },
-        trigger: {channelId: 'calls'}
+        trigger: null
       });
-    } catch (fallbackError:any) {
-      console.warn('Incoming-call notification fallback failed:', fallbackError?.message || fallbackError);
+    } catch (notificationError:any) {
+      console.warn('Guftin incoming-call alert failed:', notificationError?.message || notificationError);
     }
   }
 };
@@ -195,10 +203,6 @@ const getDocumentMimeType=(name:string)=>{
 };
 const PERMISSION_SETUP_STEPS = [
   {key:'notifications',icon:'🔔',title:'Notifications',description:'Allow message alerts, status likes and views, and incoming voice/video call alerts while Guftin is in the background.'},
-  ...(Platform.OS==='android'?[
-    {key:'phoneAccount',icon:'📞',title:'Android calling account',description:'Enable Guftin in Android Phone accounts so the system can show the full incoming-call screen and native call controls.'},
-    {key:'fullScreenCalls',icon:'📲',title:'Full-screen incoming calls',description:'Allow Guftin to show the complete incoming-call screen over the lock screen and other apps. Android opens the special-access settings page.'}
-  ]:[]),
   {key:'microphone',icon:'🎙️',title:'Microphone',description:'Allow the microphone for voice messages and voice/video calls.'},
   {key:'camera',icon:'📷',title:'Camera',description:'Allow the camera so you can join video calls and share camera video.'},
   {key:'photos',icon:'🖼️',title:'Photos and videos',description:'Allow photo and video access when you choose a profile picture, share media, or post a status.'},
@@ -397,6 +401,17 @@ function CallRoomScreen({callType,onHangUp,callScope}:any) {
 function CallLobbyScreen({call,mode,onAccept,onDecline,onCancel,busy}:any) {
   const incoming = mode === 'incoming';
   const callType = call?.call_type || call?.callType || 'voice';
+  const ringPulse = useRef(new Animated.Value(0)).current;
+  useEffect(()=>{
+    const animation=Animated.loop(Animated.sequence([
+      Animated.timing(ringPulse,{toValue:1,duration:1450,useNativeDriver:true}),
+      Animated.timing(ringPulse,{toValue:0,duration:0,useNativeDriver:true})
+    ]));
+    animation.start();
+    return ()=>animation.stop();
+  },[ringPulse]);
+  const pulseScale=ringPulse.interpolate({inputRange:[0,1],outputRange:[1,1.52]});
+  const pulseOpacity=ringPulse.interpolate({inputRange:[0,1],outputRange:[0.48,0]});
   const isVideo = callType === 'video';
   const isGroup = (call?.call_scope || call?.callScope) === 'group';
   const displayName = incoming
@@ -419,13 +434,19 @@ function CallLobbyScreen({call,mode,onAccept,onDecline,onCancel,busy}:any) {
       </View>
 
       <View style={{alignItems:'center',justifyContent:'center',flex:1,paddingVertical:24}}>
-        <View style={{width:202,height:202,borderRadius:101,borderWidth:1,backgroundColor:'#0b2a23',borderColor:'#286a55',alignItems:'center',justifyContent:'center',shadowColor:'#31c48d',shadowOpacity:0.22,shadowRadius:24,elevation:12}}>
-          <View style={{width:164,height:164,borderRadius:82,borderWidth:2,borderColor:'#3a9c79',backgroundColor:'#164638',alignItems:'center',justifyContent:'center'}}>
-            <Text style={{fontSize:55,fontWeight:'900',color:'#f5fff9'}}>{initials(displayName)}</Text>
+        <View style={{width:220,height:220,alignItems:'center',justifyContent:'center'}}>
+          <Animated.View style={{position:'absolute',width:184,height:184,borderRadius:92,borderWidth:2,borderColor:'#49d7a0',opacity:pulseOpacity,transform:[{scale:pulseScale}]}}/>
+          <View style={{width:174,height:174,borderRadius:87,borderWidth:2,backgroundColor:'#0b2a23',borderColor:'#286a55',alignItems:'center',justifyContent:'center',shadowColor:'#31c48d',shadowOpacity:0.28,shadowRadius:28,elevation:14,overflow:'hidden'}}>
+            {call?.contact_avatar_url||call?.avatar_url
+              ?<Image source={{uri:call.contact_avatar_url||call.avatar_url}} style={{width:160,height:160,borderRadius:80}}/>
+              :<View style={{width:160,height:160,borderRadius:80,borderWidth:2,borderColor:'#3a9c79',backgroundColor:'#164638',alignItems:'center',justifyContent:'center'}}>
+                <Text style={{fontSize:55,fontWeight:'900',color:'#f5fff9'}}>{initials(displayName)}</Text>
+              </View>}
           </View>
         </View>
         <Text numberOfLines={2} style={{fontSize:30,fontWeight:'900',color:'#fff',textAlign:'center',marginTop:30,letterSpacing:-0.6}}>{displayName}</Text>
         <Text style={{fontSize:13,color:'#a8cfc0',marginTop:9,fontWeight:'700'}}>{isGroup?'Group conversation':isVideo?'Guftin video call':'Guftin voice call'}</Text>
+      <Text style={{fontSize:10,color:'#78bba0',marginTop:7,letterSpacing:1.2,fontWeight:'800'}}>END-TO-END ENCRYPTED</Text>
         <View style={{marginTop:24,paddingHorizontal:17,paddingVertical:10,borderRadius:18,backgroundColor:'#10382d',borderWidth:1,borderColor:'#245c49',flexDirection:'row',alignItems:'center',gap:9}}>
           <View style={{width:7,height:7,borderRadius:4,backgroundColor:busy?'#e8c46a':'#52dda2'}}/>
           <Text style={{fontSize:12,color:'#d9f3e7',fontWeight:'800'}}>{statusLabel}</Text>
@@ -559,8 +580,6 @@ function GuftinApp() {
   const [permissionSetupBusy,setPermissionSetupBusy]=useState(false);
   const [permissionSetupAutoSave,setPermissionSetupAutoSave]=useState(true);
   const [permissionSetupNotice,setPermissionSetupNotice]=useState('');
-  const [permissionSetupAwaitingSystemSetting,setPermissionSetupAwaitingSystemSetting]=useState<string|null>(null);
-  const permissionSetupAwaitingSystemSettingRef=useRef<string|null>(null);
   const [themeName,setThemeName]=useState('emerald');
   const [deliveredByMessage,setDeliveredByMessage]=useState<Record<string,string>>({});
   const hiddenMessageIds=useRef(new Set<string>());
@@ -978,47 +997,6 @@ function GuftinApp() {
     };
   },[session?.user?.id,pushPermissionReady]);
 
-  // Verify the Android Phone Account when returning from Settings. Android's
-  // full-screen special-access toggle is confirmed by the user in Settings;
-  // avoid a custom native bridge being loaded during app startup for that check.
-  useEffect(()=>{
-    if(Platform.OS!=='android')return;
-    let leftGuftin=false;
-    const subscription=AppState.addEventListener('change',nextState=>{
-      if(nextState!=='active'){
-        leftGuftin=true;
-        return;
-      }
-      if(!leftGuftin)return;
-      leftGuftin=false;
-      const pendingKey=permissionSetupAwaitingSystemSettingRef.current;
-      if(!pendingKey)return;
-      void (async()=>{
-        try{
-          const enabled=pendingKey==='phoneAccount'
-            ? await RNCallKeep.hasPhoneAccount()
-            : pendingKey==='fullScreenCalls';
-          permissionSetupAwaitingSystemSettingRef.current=null;
-          setPermissionSetupAwaitingSystemSetting(null);
-          if(pendingKey==='fullScreenCalls'){
-            setPermissionSetupNotice('Returned from Android settings. Confirm that Allow full-screen notifications is ON, then continue.');
-            setPermissionSetupStep(current=>current+1);
-          }else if(enabled){
-            setPermissionSetupNotice('Android calling account enabled successfully.');
-            setPermissionSetupStep(current=>current+1);
-          }else{
-            setPermissionSetupNotice('Guftin calling account is still OFF. Turn it ON in Android Phone accounts, then tap Allow again.');
-          }
-        }catch(error:any){
-          permissionSetupAwaitingSystemSettingRef.current=null;
-          setPermissionSetupAwaitingSystemSetting(null);
-          setPermissionSetupNotice(error?.message||'Could not verify this Android setting. Tap Allow to open Settings again.');
-        }
-      })();
-    });
-    return ()=>subscription.remove();
-  },[session?.user?.id]);
-
   const enablePushNotifications=async()=>{
     if(!session||pushBusy)return;
     setPushBusy(true);
@@ -1117,23 +1095,7 @@ function GuftinApp() {
             setPermissionSetupNotice(error?.message||'Android permission is allowed, but Expo/Firebase push registration still needs configuration.');
           }
         }
-      }else if(step.key==='phoneAccount'){
-        await ensureCallKeepReady();
-        granted=await RNCallKeep.hasPhoneAccount();
-        if(!granted){
-          permissionSetupAwaitingSystemSettingRef.current='phoneAccount';
-          setPermissionSetupAwaitingSystemSetting('phoneAccount');
-          setPermissionSetupNotice('Opening Android Phone accounts. Enable Guftin there, then return here; Guftin will verify it automatically.');
-          await openPhoneAccountSettings();
-          return;
-        }
-      }else if(step.key==='fullScreenCalls'){
-        permissionSetupAwaitingSystemSettingRef.current='fullScreenCalls';
-        setPermissionSetupAwaitingSystemSetting('fullScreenCalls');
-        setPermissionSetupNotice('Opening Android Special app access. Turn ON Allow full-screen notifications for Guftin, then return here and continue.');
-        await openFullScreenCallSettings();
-        return;
-      }else if(step.key==='microphone'){
+      }else if(step.key==='microphone'){      }else if(step.key==='microphone'){
         const permission=await Audio.requestPermissionsAsync();
         granted=permission.granted;canAskAgain=permission.canAskAgain;
       }else if(step.key==='camera'){
@@ -1159,38 +1121,6 @@ function GuftinApp() {
     }catch(error:any){
       Alert.alert('Permission request failed',error?.message||'You can skip this permission and change it later in Android settings.');
     }finally{setPermissionSetupBusy(false);}
-  };
-
-  const openPhoneAccountSettings=async()=>{
-    if(Platform.OS!=='android')return;
-    try{
-      await ensureCallKeepReady();
-      await IntentLauncher.startActivityAsync('android.telecom.action.CHANGE_PHONE_ACCOUNTS');
-    }catch(error:any){
-      Alert.alert('Android calling account','Open your Phone app settings → Calling accounts → Guftin, then enable the Guftin account.');
-    }
-  };
-
-  const openFullScreenCallSettings=async()=>{
-    if(Platform.OS!=='android')return;
-    try{
-      if(Number(Platform.Version)>=34){
-        await IntentLauncher.startActivityAsync(
-          IntentLauncher.ActivityAction.MANAGE_APP_USE_FULL_SCREEN_INTENT,
-          {data:'package:com.guftin.app'}
-        );
-      }else{
-        await IntentLauncher.startActivityAsync(
-          IntentLauncher.ActivityAction.APP_NOTIFICATION_SETTINGS,
-          {extra:{'android.provider.extra.APP_PACKAGE':'com.guftin.app'}}
-        );
-      }
-    }catch(error:any){
-      Alert.alert(
-        'Incoming call screen settings',
-        'Open Android Settings → Apps → Guftin → Notifications. On Android 14 or later, also allow full-screen notifications under Special app access.'
-      );
-    }
   };
 
   const dispatchPush=async(kind:'message'|'call'|'status'|'status_like'|'status_view',id:string)=>{
@@ -2204,7 +2134,7 @@ function GuftinApp() {
       // RNCallKeep.startCall here also launches the generic Android Telecom
       // outgoing flow and can cover the app's custom call screen.
       setIncomingCall(null);
-      setOutgoingCall({...call,contact_name:active.name,contact_avatar:active.avatar});
+      setOutgoingCall({...call,contact_name:active.name,contact_avatar:active.avatar,contact_avatar_url:active.avatarUrl});
       void dispatchPush('call',call.id);
     }catch(e:any){
       Alert.alert('Call could not start',e?.message||'Please try again.');
@@ -2221,7 +2151,9 @@ function GuftinApp() {
     }else{
       await supabase.from('kc_call_logs').update({status:'ended',ended_at:new Date().toISOString()}).eq('id',callId);
     }
-    if(!fromNative&&Platform.OS==='android')RNCallKeep.endCall(callId);
+    if(Platform.OS==='android'){
+      try{RNCallKeep.endCall(callId);}catch(error:any){console.warn('Could not end self-managed Telecom call:',error?.message||error);}
+    }
     setLiveCall(null);
     setOutgoingCall(null);
     setIncomingCall(null);
@@ -2297,11 +2229,28 @@ function GuftinApp() {
     const endSub=RNCallKeep.addEventListener('endCall',({callUUID}:any)=>{
       void nativeCallActionHandlerRef.current?.(callUUID,'end');
     });
+    // Self-managed Android calls explicitly ask the app to present its own UI.
+    const showUiSub=RNCallKeep.addEventListener('showIncomingCallUi',({callUUID}:any)=>{
+      if(!session?.user?.id||!callUUID)return;
+      void supabase.from('kc_call_logs')
+        .select('id,conversation_id,caller_id,callee_id,call_type,status,call_scope')
+        .eq('id',callUUID).maybeSingle().then(async({data:call,error})=>{
+          if(error||!call||call.status!=='ringing')return;
+          if((call.call_scope||'direct')==='group'){
+            const {data:participant,error:participantError}=await supabase.from('kc_call_participants')
+              .select('status,role').eq('call_id',call.id).eq('user_id',session.user.id).maybeSingle();
+            if(participantError||!participant||!['invited','ringing'].includes(participant.status))return;
+          }else if(call.callee_id!==session.user.id)return;
+          setTab('Calls');
+          setIncomingCall(call);
+        });
+    });
     return ()=>{
       answerSub.remove();
       endSub.remove();
+      showUiSub.remove();
     };
-  },[]);
+  },[session?.user?.id]);
 
   useEffect(()=>{
     if(!session?.user?.id||Platform.OS!=='android')return;
@@ -2731,14 +2680,13 @@ function GuftinApp() {
             <Switch value={permissionSetupAutoSave} onValueChange={setPermissionSetupAutoSave} trackColor={{true:C.green}}/>
           </View>:null}
           {permissionSetupNotice?<Text style={{fontSize:11,color:C.muted,lineHeight:17,marginTop:15}}>{permissionSetupNotice}</Text>:null}
-          {permissionSetupAwaitingSystemSetting?<Text style={{fontSize:11,color:C.green,lineHeight:17,marginTop:10}}>Android Settings opened. Enable the switch there and return to Guftin; it will check the setting automatically.</Text>:null}
         </View>
         <View style={{flexDirection:'row',gap:10,marginTop:22}}>
           <Btn disabled={permissionSetupBusy} onPress={()=>void skipPermissionSetupStep()} style={{flex:1,padding:15,borderRadius:14,alignItems:'center',backgroundColor:C.white,borderWidth:1,borderColor:C.line}}>
             <Text style={{color:C.ink,fontWeight:'800'}}>Not now</Text>
           </Btn>
           <Btn disabled={permissionSetupBusy} onPress={()=>void requestPermissionSetupStep()} style={{flex:1,padding:15,borderRadius:14,alignItems:'center',backgroundColor:C.green}}>
-            {permissionSetupBusy?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'900'}}>{step.key==='autoSave'?'Save choice':step.key==='phoneAccount'||step.key==='fullScreenCalls'?'Allow / Open settings':'Allow'}</Text>}
+            {permissionSetupBusy?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'900'}}>{step.key==='autoSave'?'Save choice':'Allow'}</Text>}
           </Btn>
         </View>
         <Text style={{fontSize:10,color:C.muted,textAlign:'center',lineHeight:16,marginTop:18}}>Contacts and location permission are not needed for username-based Guftin chats. Android only grants access when you choose Allow.</Text>
@@ -3025,16 +2973,10 @@ function GuftinApp() {
         <Btn disabled={pushBusy||!session} onPress={()=>void testPushNotifications()} style={{backgroundColor:C.mint,padding:12,borderRadius:13,marginTop:2,marginBottom:7,opacity:pushBusy ? .55 : 1}}>
           <Text style={{color:C.green,fontWeight:'900',textAlign:'center'}}>{pushBusy?'Checking notification service…':'Send test notification to this phone'}</Text>
         </Btn>
-        {Platform.OS==='android'?<>
-          <Btn onPress={()=>void openPhoneAccountSettings()} style={{padding:13,backgroundColor:C.mint,borderRadius:13,marginTop:6,marginBottom:8}}>
-            <Text style={{color:C.green,fontWeight:'900',textAlign:'center'}}>Enable Guftin calling account　›</Text>
-            <Text style={{color:C.muted,fontSize:10,textAlign:'center',marginTop:4}}>Allow Android Telecom to show and ring incoming calls</Text>
-          </Btn>
-          <Btn onPress={()=>void openFullScreenCallSettings()} style={{padding:13,backgroundColor:C.mint,borderRadius:13,marginBottom:8}}>
-            <Text style={{color:C.green,fontWeight:'900',textAlign:'center'}}>Enable full-screen incoming calls　›</Text>
-            <Text style={{color:C.muted,fontSize:10,textAlign:'center',marginTop:4}}>Android 14+: allow full-screen notifications in Special app access</Text>
-          </Btn>
-        </>:null}
+        <View style={{padding:13,backgroundColor:C.mint,borderRadius:13,marginTop:6,marginBottom:8}}>
+          <Text style={{color:C.green,fontWeight:'900',textAlign:'center'}}>Guftin in-app calling</Text>
+          <Text style={{color:C.muted,fontSize:11,textAlign:'center',marginTop:5,lineHeight:17}}>Incoming, outgoing and active calls use Guftin's own call screens. Android Phone app calling-account setup is not required.</Text>
+        </View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Automatic message sync</Text><Text style={{color:C.muted,fontSize:11}}>Refresh while Guftin is open</Text></View><Switch value={autoSync} onValueChange={setAutoSync} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Auto-save incoming photos/videos</Text><Text style={{color:C.muted,fontSize:11}}>Save new media to your gallery automatically</Text></View><Switch value={mediaAutoDownload} onValueChange={setMediaAutoDownload} trackColor={{true:C.green}}/></View>
         <Text style={{color:C.ink,fontWeight:'800',marginTop:12}}>App theme</Text>
