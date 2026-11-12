@@ -1093,7 +1093,7 @@ function GuftinApp() {
             setPermissionSetupNotice(error?.message||'Android permission is allowed, but Expo/Firebase push registration still needs configuration.');
           }
         }
-      }else if(step.key==='microphone'){      }else if(step.key==='microphone'){
+      }else if(step.key==='microphone'){
         const permission=await Audio.requestPermissionsAsync();
         granted=permission.granted;canAskAgain=permission.canAskAgain;
       }else if(step.key==='camera'){
