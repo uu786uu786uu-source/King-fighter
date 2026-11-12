@@ -1054,8 +1054,6 @@ function GuftinApp() {
     if(!session?.user?.id)return;
     try{await AsyncStorage.setItem('guftin-permission-setup-v1:'+session.user.id,'completed');}
     catch(error:any){console.warn('Could not save permission setup completion:',error?.message||error);}
-    permissionSetupAwaitingSystemSettingRef.current=null;
-    setPermissionSetupAwaitingSystemSetting(null);
     setPermissionSetupVisible(false);
     setPermissionSetupNotice('');
   };
