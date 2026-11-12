@@ -22,7 +22,7 @@ adb logcat -c
 timeout 30s adb shell monkey -p com.guftin.app -c android.intent.category.LAUNCHER 1
 
 # Give React Native, native modules, and the first screen time to initialize.
-sleep 40
+sleep 60
 capture_logs
 
 PID="$(adb shell pidof -s com.guftin.app | tr -d '\r' || true)"
@@ -32,10 +32,17 @@ if [[ -z "$PID" ]]; then
   exit 1
 fi
 
-if grep -E -q 'FATAL EXCEPTION|Fatal signal [0-9]+' "$LOG"; then
-  echo "::error::Android reported a fatal exception during Guftin startup. Inspect startup-smoke-logcat.txt."
-  grep -E -i 'FATAL EXCEPTION|Fatal signal|UnsatisfiedLinkError|AndroidRuntime|ReactNativeJS|SoLoader|LiveKit' "$LOG" | tail -n 160 || true
+if grep -E -q 'FATAL EXCEPTION|Fatal signal [0-9]+|TurboModuleInteropUtils|Exception in HostObject' "$LOG"; then
+  echo "::error::Android reported a fatal exception or native-module startup error. Inspect startup-smoke-logcat.txt."
+  grep -E -i 'FATAL EXCEPTION|Fatal signal|TurboModuleInteropUtils|Exception in HostObject|UnsatisfiedLinkError|AndroidRuntime|ReactNativeJS|SoLoader|LiveKit' "$LOG" | tail -n 160 || true
   exit 1
 fi
 
-echo "Guftin remained alive for 40 seconds after a fresh Android 16 launch (PID $PID)."
+RESUMED_ACTIVITY="$(adb shell dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity' | grep -F 'com.guftin.app' || true)"
+if [[ -z "$RESUMED_ACTIVITY" ]]; then
+  echo "::error::Guftin process is alive but its launcher activity is not resumed."
+  exit 1
+fi
+
+echo "Guftin remained alive for 60 seconds and its launcher activity stayed resumed (PID $PID)."
+echo "$RESUMED_ACTIVITY"
