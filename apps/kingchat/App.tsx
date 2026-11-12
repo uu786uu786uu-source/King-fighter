@@ -481,7 +481,7 @@ function CallLobbyScreen({call,mode,onAccept,onDecline,onCancel,busy}:any) {
   </SafeAreaView>;
 }
 
-function SecureLiveKitRoom({liveCall,onDisconnected,onHangUp}:any) {
+function SecureLiveKitRoom({liveCall,onDisconnected,onHangUp,onConnected}:any) {
   // One group-call key is wrapped separately to every registered participant device.
   const {e2eeManager}=useRNE2EEManager({sharedKey:liveCall.e2eeKey});
   return <LiveKitRoom
@@ -491,6 +491,7 @@ function SecureLiveKitRoom({liveCall,onDisconnected,onHangUp}:any) {
     audio={true}
     video={liveCall.callType==='video'}
     options={{e2ee:{e2eeManager}}}
+    onConnected={onConnected}
     onDisconnected={onDisconnected}
     onEncryptionError={(error:any)=>Alert.alert('Call encryption error',error?.message||'Media encryption could not be started.')}
   >
@@ -1184,21 +1185,22 @@ function GuftinApp() {
       if(callRecordError)throw callRecordError;
       if(!callRecord||callRecord.status!=='accepted')throw new Error('The call is no longer accepted.');
       const callScope=callRecord.call_scope||'direct';
+      let nativeIncomingCall=false;
       if(callScope==='group'){
         const {data:participant,error:participantError}=await supabase.from('kc_call_participants')
-          .select('status').eq('call_id',call.id).eq('user_id',session.user.id).maybeSingle();
+          .select('status,role').eq('call_id',call.id).eq('user_id',session.user.id).maybeSingle();
         if(participantError)throw participantError;
         if(!participant||participant.status!=='accepted')throw new Error('Accept this group call before joining.');
+        nativeIncomingCall=participant.role==='invitee';
+      }else{
+        nativeIncomingCall=callRecord.callee_id===session.user.id;
       }
       const e2eeKey=decryptCallKeyForDevice(callRecord.e2ee_key_envelopes,deviceIdentity);
       const {data,error}=await supabase.functions.invoke('livekit-token',{body:{call_id:call.id}});
       if(error)throw error;
       if(!data?.server_url||!data?.participant_token)throw new Error(data?.error||'The LiveKit token endpoint is not ready.');
-      setLiveCall({id:call.id,callType:callRecord.call_type,callScope,serverUrl:data.server_url,token:data.participant_token,e2eeKey});
-      if(Platform.OS==='android'){
-        try{await RNCallKeep.setCurrentCallActive(call.id);}
-        catch(nativeStateError:any){console.warn('Android Telecom call-state sync:',nativeStateError?.message||nativeStateError);}
-      }
+      setLiveCall({id:call.id,callType:callRecord.call_type,callScope,serverUrl:data.server_url,token:data.participant_token,e2eeKey,nativeIncomingCall});
+      // Mark Android Telecom active only after the secure media room connects.
       setIncomingCall(null);
       setOutgoingCall(null);
     }catch(e:any){
@@ -1222,11 +1224,22 @@ function GuftinApp() {
     }
   },[session,deviceIdentity,e2eeStatus]);
 
+  const syncNativeIncomingCallAction=(callId:string,status:'accepted'|'declined')=>{
+    if(Platform.OS!=='android')return;
+    try{
+      if(status==='accepted')RNCallKeep.answerIncomingCall(callId);
+      else RNCallKeep.rejectCall(callId);
+    }catch(error:any){
+      console.warn('Android self-managed call action sync:',error?.message||error);
+    }
+  };
+
   const respondToCall=useCallback(async(call:any,status:'accepted'|'declined')=>{
     if(!session||!call?.id)return;
     if((call.call_scope||'direct')==='group'){
       const {error}=await supabase.rpc('kc_answer_group_call',{p_call_id:call.id,p_status:status});
       if(error){Alert.alert('Group call action failed',error.message);return;}
+      syncNativeIncomingCallAction(call.id,status);
       setIncomingCall(null);
       if(status==='accepted')await joinCall({...call,status:'accepted'});
       else setOutgoingCall(null);
@@ -1237,6 +1250,7 @@ function GuftinApp() {
     else update.ended_at=new Date().toISOString();
     const {error}=await supabase.from('kc_call_logs').update(update).eq('id',call.id);
     if(error){Alert.alert('Call action failed',error.message);return;}
+    syncNativeIncomingCallAction(call.id,status);
     setIncomingCall(null);
     if(status==='accepted')await joinCall({...call,status:'accepted'});
     else setOutgoingCall(null);
@@ -2149,7 +2163,8 @@ function GuftinApp() {
     }else{
       await supabase.from('kc_call_logs').update({status:'ended',ended_at:new Date().toISOString()}).eq('id',callId);
     }
-    if(Platform.OS==='android'){
+    const hasNativeIncomingCall=(liveCall?.id===callId&&liveCall?.nativeIncomingCall)||(incomingCall?.id===callId);
+    if(hasNativeIncomingCall&&Platform.OS==='android'){
       try{RNCallKeep.endCall(callId);}catch(error:any){console.warn('Could not end self-managed Telecom call:',error?.message||error);}
     }
     setLiveCall(null);
@@ -2695,6 +2710,12 @@ function GuftinApp() {
   if(liveCall){
     return <SecureLiveKitRoom
       liveCall={liveCall}
+      onConnected={()=>{
+        if(Platform.OS==='android'&&liveCall.nativeIncomingCall){
+          try{RNCallKeep.setCurrentCallActive(liveCall.id);}
+          catch(nativeStateError:any){console.warn('Android incoming call active-state sync:',nativeStateError?.message||nativeStateError);}
+        }
+      }}
       onDisconnected={()=>void endCall(liveCall.id)}
       onHangUp={()=>void endCall(liveCall.id)}
     />;
