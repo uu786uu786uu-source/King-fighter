@@ -6,6 +6,7 @@ module.exports = function withCallKeepAndroidPermissions(config) {
     manifest["uses-permission"] = manifest["uses-permission"] || [];
     const permissions = [
       "android.permission.USE_FULL_SCREEN_INTENT",
+      "android.permission.MANAGE_OWN_CALLS",
       "android.permission.FOREGROUND_SERVICE",
       "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
       "android.permission.FOREGROUND_SERVICE_MICROPHONE"
