@@ -41,7 +41,7 @@
     "react-native-google-mobile-ads": "16.0.3",
     "react-native-nitro-modules": "0.37.1",
     "@react-native-community/netinfo": "11.4.1",
-    "react-native-callkeep": "4.3.16",
+    "react-native-callkeep": "4.6.1",
     "@config-plugins/react-native-callkeep": "12.0.0",
     "expo-task-manager": "~14.0.9",
     "expo-document-picker": "~14.0.8",
