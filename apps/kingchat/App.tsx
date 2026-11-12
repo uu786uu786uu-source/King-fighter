@@ -2245,6 +2245,11 @@ function GuftinApp() {
     // Self-managed Android calls explicitly ask the app to present its own UI.
     const showUiSub=RNCallKeep.addEventListener('showIncomingCallUi',({callUUID}:any)=>{
       if(!session?.user?.id||!callUUID)return;
+      // Self-managed Telecom deliberately has no Phone-app UI. Bring Guftin
+      // forward so its own full-screen incoming-call surface is what the user sees.
+      try{RNCallKeep.backToForeground();}catch(foregroundError:any){
+        console.warn('Could not foreground Guftin for incoming call:',foregroundError?.message||foregroundError);
+      }
       void supabase.from('kc_call_logs')
         .select('id,conversation_id,caller_id,callee_id,call_type,status,call_scope')
         .eq('id',callUUID).maybeSingle().then(async({data:call,error})=>{
@@ -2502,6 +2507,21 @@ function GuftinApp() {
 
   const loadStatuses=useCallback(async()=>{
     if(!session)return;
+    const statusCacheKey='guftin-cache-statuses:'+session.user.id;
+    // Paint the last successfully synced status feed immediately. Cached media
+    // is stored as an app-private file so previously loaded statuses remain
+    // viewable without a network connection.
+    try{
+      const cachedRaw=await AsyncStorage.getItem(statusCacheKey);
+      if(cachedRaw){
+        const cached=JSON.parse(cachedRaw);
+        if(Array.isArray(cached)){
+          const stillValid=cached.filter((item:any)=>!item.expires_at||new Date(item.expires_at).getTime()>Date.now());
+          setStatuses(stillValid);
+        }
+      }
+    }catch{ /* A damaged cache must never prevent online refresh. */ }
+    if(!onlineRef.current)return;
     const {data,error}=await supabase.from('kc_status_updates')
       .select('id,user_id,caption,media_url,created_at,expires_at')
       .gt('expires_at',new Date().toISOString())
@@ -2543,6 +2563,18 @@ function GuftinApp() {
     const statusActorMap=new Map((statusActors||[]).map((person:any)=>[person.id,person]));
     const mapped=await Promise.all(rows.map(async row=>{
       const signed=row.media_url?await getSignedMediaUrl(row.media_url):null;
+      let playableMedia=signed;
+      if(signed&&row.media_url){
+        try{
+          const rawExtension=String(row.media_url).split('.').pop()?.toLowerCase()||'jpg';
+          const extension=rawExtension.replace(/[^a-z0-9]/g,'').slice(0,5)||'jpg';
+          const localFile=new File(Paths.document,'guftin-status-'+row.id+'.'+extension);
+          if(!localFile.exists)await File.downloadFileAsync(signed,localFile);
+          if(localFile.exists)playableMedia=localFile.uri;
+        }catch(downloadError:any){
+          console.warn('Status offline media cache:',downloadError?.message||downloadError);
+        }
+      }
       const avatarPath=(people.get(row.user_id) as any)?.avatar_url||null;
       const avatarSigned=avatarPath?await getSignedMediaUrl(avatarPath):null;
       const views=(viewsResult.data||[]).filter((view:any)=>view.status_id===row.id);
@@ -2553,7 +2585,7 @@ function GuftinApp() {
         username:(people.get(row.user_id) as any)?.username||'',
         avatar_signed_url:avatarSigned,
         status_count:rows.filter(candidate=>candidate.user_id===row.user_id).length,
-        media_signed_url:signed,
+        media_signed_url:playableMedia,
         view_count:views.length,
         viewer_names:views.map((view:any)=>(statusActorMap.get(view.viewer_id) as any)?.display_name||'Guftin member'),
         liker_names:likes.map((like:any)=>(statusActorMap.get(like.user_id) as any)?.display_name||'Guftin member'),
@@ -2562,6 +2594,7 @@ function GuftinApp() {
       };
     }));
     setStatuses(mapped);
+    void AsyncStorage.setItem(statusCacheKey,JSON.stringify(mapped)).catch(()=>{});
   },[session,getSignedMediaUrl]);
 
   const toggleStatusLike=async(status:any)=>{
