@@ -37,6 +37,8 @@ jobs:
           fi
       - name: Install dependencies
         run: npm install
+      - name: Patch RNCallKeep duplicate Android bridge exports
+        run: npm run patch:callkeep
       - name: TypeScript check
         run: npm run typecheck
       - name: Generate Guftin launcher and splash assets
@@ -50,15 +52,25 @@ jobs:
           CI: 1
           EXPO_PUBLIC_EAS_PROJECT_ID: ${{ vars.EXPO_PUBLIC_EAS_PROJECT_ID || secrets.EXPO_PUBLIC_EAS_PROJECT_ID || '814cd723-8bea-4288-84b5-d489fdb37269' }}
         run: npx expo prebuild --platform android
-      - name: Verify Android architecture and CallKeep dependency
+      - name: Verify New Architecture and CallKeep exports
         shell: bash
         run: |
           set -euo pipefail
-          grep -Fxq 'newArchEnabled=false' android/gradle.properties
-          node -e 'const p=require("react-native-callkeep/package.json"); console.log("CallKeep version:", p.version); if (p.version !== "4.6.1") process.exit(1);'
-          CALLKEEP_SOURCE="node_modules/react-native-callkeep/android/src/main/java/io/wazo/callkeep/RNCallKeepModule.java"
-          test -s "$CALLKEEP_SOURCE"
-          echo "Android legacy bridge is explicitly selected; CallKeep native source is present."
+          grep -Fxq 'newArchEnabled=true' android/gradle.properties
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const p = require('react-native-callkeep/package.json');
+          const source = fs.readFileSync('node_modules/react-native-callkeep/android/src/main/java/io/wazo/callkeep/RNCallKeepModule.java', 'utf8');
+          if (p.version !== '4.6.1') throw new Error('Unexpected react-native-callkeep version: ' + p.version);
+          for (const name of ['displayIncomingCall', 'startCall']) {
+            const legacy = new RegExp('@ReactMethod\\s+public void ' + name + '\\(String uuid, String number, String callerName\\)');
+            const current = new RegExp('@ReactMethod\\s+public void ' + name + '\\(String uuid, String number, String callerName, boolean hasVideo\\)', 'g');
+            if (legacy.test(source)) throw new Error('Duplicate legacy ' + name + ' bridge export remains.');
+            const count = [...source.matchAll(current)].length;
+            if (count !== 1) throw new Error(name + ' expected one annotated 4-argument bridge export; found ' + count);
+          }
+          console.log('New Architecture enabled; CallKeep Android bridge exports are unique.');
+          NODE
       - name: Verify LiveKit Android startup initialization
         shell: bash
         run: |
