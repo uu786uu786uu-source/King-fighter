@@ -44,9 +44,8 @@ module.exports = ({ config }) => ({
     ...config.android,
     package: "com.guftin.app",
     versionCode: 28,
-    // react-native-callkeep triggers a duplicate-method TurboModule crash in this SDK 54 build.
-    // Keep Android on the supported legacy bridge until the native module path is verified on New Architecture.
-    newArchEnabled: false,
+    // Google Mobile Ads 16.0.3 requires the New Architecture; CallKeep overloads are patched during CI install.
+    newArchEnabled: true,
     // Add the Firebase Android client config when the owner supplies it.
     ...(fs.existsSync(path.join(__dirname, "google-services.json"))
       ? { googleServicesFile: "./google-services.json" }
