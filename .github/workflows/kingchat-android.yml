@@ -107,29 +107,7 @@ jobs:
           profile: pixel_6
           emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
           disable-animations: true
-          script: |
-            set -eu
-            APK="$GITHUB_WORKSPACE/apps/kingchat/android/app/build/outputs/apk/release/app-release.apk"
-            LOG="$GITHUB_WORKSPACE/apps/kingchat/startup-smoke-logcat.txt"
-            trap 'adb logcat -d -v threadtime > "$LOG" 2>/dev/null || true' EXIT
-            test -s "$APK"
-            ls -lh "$APK"
-            adb wait-for-device
-            timeout 180s adb install -r "$APK"
-            adb logcat -c
-            timeout 30s adb shell monkey -p com.guftin.app -c android.intent.category.LAUNCHER 1
-            sleep 25
-            adb logcat -d -v threadtime > "$LOG"
-            PID="$(adb shell pidof -s com.guftin.app | tr -d '\\r' || true)"
-            if [ -z "$PID" ]; then
-              echo "::error::Guftin exited during Android emulator startup. See startup-smoke-logcat.txt."
-              exit 1
-            fi
-            if grep -Eq 'FATAL EXCEPTION|Fatal signal [0-9]+' startup-smoke-logcat.txt; then
-              echo "::error::Android runtime reported a fatal startup exception. See startup-smoke-logcat.txt."
-              exit 1
-            fi
-            echo "Guftin remained alive after a fresh Android 15 launch (PID $PID)."
+          script: bash "$GITHUB_WORKSPACE/apps/kingchat/scripts/android-startup-smoke.sh"
       - name: Upload Android startup smoke log
         if: always()
         uses: actions/upload-artifact@v4
