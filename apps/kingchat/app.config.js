@@ -33,8 +33,8 @@ module.exports = ({ config }) => ({
     }
   },
   name: "Guftin",
-  slug: "guftin-",
-  version: "1.4.22",
+  slug: "guftin",
+  version: "1.4.23",
   orientation: "portrait",
   userInterfaceStyle: "light",
   // Keep the app deep-link scheme for Guftin links and email auth callbacks.
@@ -43,7 +43,10 @@ module.exports = ({ config }) => ({
   android: {
     ...config.android,
     package: "com.guftin.app",
-    versionCode: 27,
+    versionCode: 28,
+    // react-native-callkeep triggers a duplicate-method TurboModule crash in this SDK 54 build.
+    // Keep Android on the supported legacy bridge until the native module path is verified on New Architecture.
+    newArchEnabled: false,
     // Add the Firebase Android client config when the owner supplies it.
     ...(fs.existsSync(path.join(__dirname, "google-services.json"))
       ? { googleServicesFile: "./google-services.json" }
@@ -78,7 +81,7 @@ module.exports = ({ config }) => ({
   ios: {
     ...config.ios,
     bundleIdentifier: "com.guftin.app",
-    buildNumber: "12",
+    buildNumber: "13",
     icon: "./assets/guftin-icon.png",
     supportsTablet: true,
     infoPlist: {
