@@ -9,6 +9,7 @@
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
     "prepare:assets": "node scripts/prepare-assets.js",
+    "patch:callkeep": "node scripts/patch-callkeep-android.js",
     "eas-build-post-install": "npm run prepare:assets"
   },
   "dependencies": {
