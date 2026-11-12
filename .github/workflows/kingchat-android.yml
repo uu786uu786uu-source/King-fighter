@@ -92,9 +92,15 @@ jobs:
             exit 1
           fi
           echo "APK signing certificate matches the existing Guftin GitHub build."
+      - name: Enable KVM for Android emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
       - name: Smoke test installed APK on Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
+          working-directory: apps/kingchat
           api-level: 35
           target: google_apis
           arch: x86_64
