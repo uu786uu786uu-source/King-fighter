@@ -50,6 +50,15 @@ jobs:
           CI: 1
           EXPO_PUBLIC_EAS_PROJECT_ID: ${{ vars.EXPO_PUBLIC_EAS_PROJECT_ID || secrets.EXPO_PUBLIC_EAS_PROJECT_ID || '814cd723-8bea-4288-84b5-d489fdb37269' }}
         run: npx expo prebuild --platform android
+      - name: Verify LiveKit Android startup initialization
+        shell: bash
+        run: |
+          set -euo pipefail
+          MAIN_APP="$(find android/app/src/main/java -name MainApplication.kt -print -quit)"
+          test -n "$MAIN_APP"
+          grep -Fq 'LiveKitReactNative.setup(this, AudioType.CommunicationAudioType())' "$MAIN_APP"
+          grep -Fq 'import com.livekit.reactnative.LiveKitReactNative' "$MAIN_APP"
+          echo "LiveKit Android native initialization is present before React Native startup."
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:

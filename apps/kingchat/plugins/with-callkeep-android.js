@@ -1,7 +1,7 @@
-const { withAndroidManifest, AndroidConfig } = require("@expo/config-plugins");
+const { withAndroidManifest, AndroidConfig, withMainApplication } = require("@expo/config-plugins");
 
 module.exports = function withCallKeepAndroidPermissions(config) {
-  return withAndroidManifest(config, (config) => {
+  config = withAndroidManifest(config, (config) => {
     const manifest = config.modResults.manifest;
     manifest["uses-permission"] = manifest["uses-permission"] || [];
     const permissions = [
@@ -27,5 +27,36 @@ module.exports = function withCallKeepAndroidPermissions(config) {
     }
     return config;
   });
-};
 
+  // LiveKit must initialize its Android audio/WebRTC runtime before React Native
+  // starts. The Expo package plugin configures its manifest, but does not add this
+  // Application.onCreate() initialization to the generated MainApplication.
+  config = withMainApplication(config, (config) => {
+    let contents = config.modResults.contents;
+    const setupLine = "LiveKitReactNative.setup(this, AudioType.CommunicationAudioType())";
+
+    if (!contents.includes(setupLine)) {
+      const packageLine = contents.match(/^package [^\n]+$/m);
+      if (!packageLine) {
+        throw new Error("Guftin could not identify the Kotlin package line in MainApplication.kt.");
+      }
+      if (!contents.includes("import com.livekit.reactnative.LiveKitReactNative")) {
+        contents = contents.replace(
+          packageLine[0],
+          packageLine[0] + "\n\nimport com.livekit.reactnative.LiveKitReactNative\nimport com.livekit.reactnative.audio.AudioType"
+        );
+      }
+
+      const onCreateStart = /(override\\s+fun\\s+onCreate\\(\\)\\s*\\{\\s*super\\.onCreate\\(\\))/;
+      if (!onCreateStart.test(contents)) {
+        throw new Error("Guftin could not safely insert LiveKit setup into MainApplication.onCreate().");
+      }
+      contents = contents.replace(onCreateStart, "$1\n    " + setupLine);
+    }
+
+    config.modResults.contents = contents;
+    return config;
+  });
+
+  return config;
+};
