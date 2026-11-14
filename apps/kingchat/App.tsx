@@ -24,7 +24,7 @@ import { File, Paths } from 'expo-file-system';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import * as ExpoCrypto from 'expo-crypto';
 import { DeviceIdentity, E2EE_MEDIA_PREFIX, E2EE_PREFIX, decryptCallKeyForDevice, decryptMediaForDevice, decryptMessageForDevice, encryptCallKeyForDevices, encryptMediaForDevices, encryptMessageForDevices, loadOrCreateDeviceIdentity } from './src/lib/e2ee';
-import { AudioSession, LiveKitRoom, VideoTrack, isTrackReference, registerGlobals, useLocalParticipant, useParticipants, useRNE2EEManager, useTracks } from '@livekit/react-native';
+import { AudioSession, AndroidAudioTypePresets, LiveKitRoom, VideoTrack, isTrackReference, registerGlobals, useLocalParticipant, useParticipants, useRoomContext, useRNE2EEManager, useTracks } from '@livekit/react-native';
 import { Track } from 'livekit-client';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -34,6 +34,60 @@ Notifications.setNotificationHandler({handleNotification:async()=>({shouldShowAl
 const CALL_BACKGROUND_TASK = 'guftin-incoming-call-v1';
 const CALL_NOTIFICATION_CHANNEL_ID = 'guftin_call_ringtone_v1';
 const CALL_RINGTONE_SOUND = 'guftin_call_ringtone.wav';
+
+// LiveKit owns Android's process-wide communication audio mode during calls.
+// Serialize start/stop operations and explicitly restore media playback mode
+// after every disconnect so video/music apps are not left in call audio mode.
+let guftinCallAudioStartPromise: Promise<void> | null = null;
+let guftinCallAudioStopPromise: Promise<void> | null = null;
+let guftinCallAudioSessionActive = false;
+
+const startGuftinCallAudioSession = async (): Promise<void> => {
+  if (guftinCallAudioStopPromise) await guftinCallAudioStopPromise;
+  if (guftinCallAudioStartPromise) return guftinCallAudioStartPromise;
+  guftinCallAudioStartPromise = (async () => {
+    if (Platform.OS === 'android') {
+      await AudioSession.configureAudio({
+        android: { audioTypeOptions: AndroidAudioTypePresets.communication }
+      });
+    }
+    await AudioSession.startAudioSession();
+    guftinCallAudioSessionActive = true;
+  })().finally(() => {
+    guftinCallAudioStartPromise = null;
+  });
+  return guftinCallAudioStartPromise;
+};
+
+const stopGuftinCallAudioSession = async (): Promise<void> => {
+  if (guftinCallAudioStopPromise) return guftinCallAudioStopPromise;
+  guftinCallAudioStopPromise = (async () => {
+    if (guftinCallAudioStartPromise) {
+      try { await guftinCallAudioStartPromise; } catch { /* start failure is handled by caller */ }
+    }
+    if (guftinCallAudioSessionActive) {
+      try {
+        await AudioSession.stopAudioSession();
+      } catch (error: any) {
+        console.warn('Guftin could not release call audio focus:', error?.message || error);
+      } finally {
+        guftinCallAudioSessionActive = false;
+      }
+    }
+    if (Platform.OS === 'android') {
+      try {
+        await AudioSession.configureAudio({
+          android: { audioTypeOptions: AndroidAudioTypePresets.media }
+        });
+      } catch (error: any) {
+        console.warn('Guftin could not restore Android media audio mode:', error?.message || error);
+      }
+    }
+  })().finally(() => {
+    guftinCallAudioStopPromise = null;
+  });
+  return guftinCallAudioStopPromise;
+};
 const incomingCallNotificationId = (callId:string) => 'guftin-incoming-call-'+callId;
 const dismissIncomingCallNotification = async (callId:string) => {
   const identifier=incomingCallNotificationId(callId);
@@ -323,11 +377,22 @@ function CallRoomScreen({callType,onHangUp,callScope}:any) {
   const {localParticipant,isMicrophoneEnabled,isCameraEnabled}=useLocalParticipant();
   const [speakerOn,setSpeakerOn]=useState(false);
   const [controlBusy,setControlBusy]=useState(false);
+  const room=useRoomContext();
+  const hangUpInProgress=useRef(false);
 
-  useEffect(()=>{
-    void AudioSession.startAudioSession();
-    return ()=>{void AudioSession.stopAudioSession();};
-  },[]);
+  const handleHangUp=async()=>{
+    if(hangUpInProgress.current)return;
+    hangUpInProgress.current=true;
+    try{
+      // Disconnect the room first. The shared audio cleanup then releases
+      // communication focus and restores normal Android media playback mode.
+      await room.disconnect();
+    }catch(error:any){
+      console.warn('Guftin room disconnect:',error?.message||error);
+    }
+    await stopGuftinCallAudioSession();
+    await onHangUp?.();
+  };
 
   const toggleMicrophone=async()=>{
     if(controlBusy)return;
@@ -414,7 +479,7 @@ function CallRoomScreen({callType,onHangUp,callScope}:any) {
           <CallControlButton label={isCameraEnabled?'Camera off':'Camera on'} active={!isCameraEnabled} disabled={controlBusy} onPress={()=>void toggleCamera()}/>
           <CallControlButton label="Flip camera" disabled={controlBusy||!isCameraEnabled} onPress={()=>void flipCamera()}/>
         </>:null}
-        <CallControlButton label="End call" danger onPress={onHangUp}/>
+        <CallControlButton label="End call" danger onPress={()=>void handleHangUp()}/>
       </View>
     </View>
   </SafeAreaView>;
@@ -505,6 +570,33 @@ function CallLobbyScreen({call,mode,onAccept,onDecline,onCancel,busy}:any) {
 function SecureLiveKitRoom({liveCall,onDisconnected,onHangUp,onConnected}:any) {
   // One group-call key is wrapped separately to every registered participant device.
   const {e2eeManager}=useRNE2EEManager({sharedKey:liveCall.e2eeKey});
+  const [audioReady,setAudioReady]=useState(false);
+
+  useEffect(()=>{
+    let mounted=true;
+    void startGuftinCallAudioSession().then(()=>{
+      if(mounted)setAudioReady(true);
+      else void stopGuftinCallAudioSession();
+    }).catch((error:any)=>{
+      console.warn('Guftin call audio session could not start:',error?.message||error);
+      if(mounted){
+        Alert.alert('Call audio unavailable','Guftin could not initialize the phone audio session. The call will be closed safely.');
+        void stopGuftinCallAudioSession().finally(()=>onHangUp?.());
+      }
+    });
+    return ()=>{
+      mounted=false;
+      void stopGuftinCallAudioSession();
+    };
+  },[]);
+
+  if(!audioReady){
+    return <View style={{flex:1,alignItems:'center',justifyContent:'center',backgroundColor:'#071c1b',padding:24}}>
+      <ActivityIndicator color="#65d6b2" size="large"/>
+      <Text style={{color:'#fff',fontWeight:'700',marginTop:14}}>Preparing secure call audio…</Text>
+    </View>;
+  }
+
   return <LiveKitRoom
     serverUrl={liveCall.serverUrl}
     token={liveCall.token}
@@ -513,7 +605,10 @@ function SecureLiveKitRoom({liveCall,onDisconnected,onHangUp,onConnected}:any) {
     video={liveCall.callType==='video'}
     options={{e2ee:{e2eeManager}}}
     onConnected={onConnected}
-    onDisconnected={onDisconnected}
+    onDisconnected={async()=>{
+      await stopGuftinCallAudioSession();
+      await onDisconnected?.();
+    }}
     onEncryptionError={(error:any)=>Alert.alert('Call encryption error',error?.message||'Media encryption could not be started.')}
   >
     <CallRoomScreen callType={liveCall.callType} callScope={liveCall.callScope} onHangUp={onHangUp}/>
@@ -607,6 +702,7 @@ function GuftinApp() {
   const hiddenMessageIds=useRef(new Set<string>());
   const handledNotificationResponses=useRef(new Set<string>());
   const joiningCallIds=useRef(new Set<string>());
+  const endingCallIds=useRef(new Set<string>());
   Object.assign(C,THEMES[themeName]||THEMES.emerald);
 
   const [authBusy,setAuthBusy]=useState(false);
@@ -1958,9 +2054,28 @@ function GuftinApp() {
 
   const stopVoiceRecording=async()=>{
     if(!recording||recordingBusy)return;setRecordingBusy(true);
-    try{await recording.stopAndUnloadAsync();const uri=recording.getURI();setRecording(null);if(uri)await uploadVoiceMessage(uri);await Audio.setAudioModeAsync({allowsRecordingIOS:false,playsInSilentModeIOS:true});}
-    catch(e:any){setRecording(null);Alert.alert('Voice message not sent',e?.message||'Please try again.');}
-    finally{setRecordingBusy(false);}
+    try{
+      await recording.stopAndUnloadAsync();
+      const uri=recording.getURI();
+      setRecording(null);
+      if(uri)await uploadVoiceMessage(uri);
+    }catch(e:any){
+      Alert.alert('Voice message not sent',e?.message||'Please try again.');
+    }finally{
+      setRecording(null);
+      // Reset Android as well as iOS audio flags even when the upload fails.
+      try{
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS:false,
+          playsInSilentModeIOS:true,
+          shouldDuckAndroid:false,
+          playThroughEarpieceAndroid:false
+        });
+      }catch(audioModeError:any){
+        console.warn('Guftin could not restore media mode after voice recording:',audioModeError?.message||audioModeError);
+      }
+      setRecordingBusy(false);
+    }
   };
 
   const sendPhotosVideos=async()=>{
@@ -2182,20 +2297,43 @@ function GuftinApp() {
   };
 
   const endCall=async(callId:string,fromNative=false)=>{
+    if(!callId||endingCallIds.current.has(callId))return;
+    endingCallIds.current.add(callId);
+
     const endingGroup=(liveCall?.id===callId&&liveCall?.callScope==='group')||(outgoingCall?.id===callId&&outgoingCall?.call_scope==='group');
-    if(endingGroup){
-      const {error}=await supabase.rpc('kc_leave_group_call',{p_call_id:callId});
-      if(error)Alert.alert('Could not leave group call',error.message);
-    }else{
-      await supabase.from('kc_call_logs').update({status:'ended',ended_at:new Date().toISOString()}).eq('id',callId);
-    }
     const hasNativeIncomingCall=(liveCall?.id===callId&&liveCall?.nativeIncomingCall)||(incomingCall?.id===callId);
-    if(hasNativeIncomingCall&&Platform.OS==='android'){
-      try{RNCallKeep.endCall(callId);}catch(error:any){console.warn('Could not end Android Telecom call:',error?.message||error);}
-    }
+
+    // Clear the local call UI immediately; network updates must not hold audio
+    // resources or leave a stale call screen on the device.
     setLiveCall(null);
     setOutgoingCall(null);
     setIncomingCall(null);
+    setPendingCallAccept((old:any)=>old?.id===callId?null:old);
+    void dismissIncomingCallNotification(callId);
+
+    if(hasNativeIncomingCall&&Platform.OS==='android'){
+      try{RNCallKeep.endCall(callId);}catch(error:any){console.warn('Could not end Android Telecom call:',error?.message||error);}
+    }
+
+    try{
+      if(endingGroup){
+        const {error}=await supabase.rpc('kc_leave_group_call',{p_call_id:callId});
+        if(error)throw error;
+      }else{
+        const {error}=await supabase.from('kc_call_logs')
+          .update({status:'ended',ended_at:new Date().toISOString()}).eq('id',callId);
+        if(error)throw error;
+      }
+    }catch(error:any){
+      console.warn('Guftin call-end server update failed:',error?.message||error);
+      Alert.alert('Call disconnected','The phone audio has been restored, but the server could not update the call status. Reopen Calls when your internet connection is available.');
+    }finally{
+      // Avoid an unbounded per-session set while retaining short-term duplicate protection.
+      if(endingCallIds.current.size>128){
+        const oldest=endingCallIds.current.values().next().value;
+        if(oldest)endingCallIds.current.delete(oldest);
+      }
+    }
   };
 
   const pendingNativeCallActions=useRef<Array<{callUUID:string;action:'answer'|'end'}>>([]);
