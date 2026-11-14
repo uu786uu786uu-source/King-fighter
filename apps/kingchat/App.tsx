@@ -1570,7 +1570,7 @@ function GuftinApp() {
       await AsyncStorage.removeItem(cacheKey);
       setMessages(prev=>({...prev,[conversationId]:[]}));
       setChats(prev=>{
-        const next=prev.map(item=>item.id===conversationId?{...item,last:'No messages yet',time:'',unread:0,lastAt:0}:item);
+        const next=prev.map(item=>item.id===conversationId?{...item,last:'No messages yet',time:'',unread:0,lastAt:0,hasPendingActivity:false,hasConversationActivity:false,hasCallActivity:false}:item);
         void AsyncStorage.setItem('guftin-cache-inbox:'+session.user.id,JSON.stringify(next)).catch(()=>{});
         return next;
       });
@@ -2534,26 +2534,57 @@ function GuftinApp() {
 
   const uploadVoiceMessage=async(uri:string)=>{
     if(!active||!session||!deviceIdentity||e2eeStatus!=='ready')throw new Error('Secure chat is not ready.');
-    const chatToSend=await ensureActiveDirectConversation(active);
-    const conversationId=chatToSend.id;
-    const file=new File(uri);if(file.size>MAX_MEDIA_BYTES)throw new Error('This file is larger than the current 45 MB cloud-storage limit.');
-    const {data:members,error:membersError}=await supabase.from('kc_conversation_members').select('user_id').eq('conversation_id',conversationId);
-    if(membersError)throw membersError;
-    const memberIds=[...new Set((members||[]).map((row:any)=>row.user_id))] as string[];
-    const {data:devices,error:devicesError}=await supabase.from('kc_e2ee_devices').select('id,user_id,public_key').in('user_id',memberIds).is('revoked_at',null);
+    const file=new File(uri);
+    if(file.size>MAX_MEDIA_BYTES)throw new Error('This file is larger than the current 45 MB cloud-storage limit.');
+
+    // A not-yet-started direct chat can validate its peer roster without first
+    // persisting an empty conversation. Create the conversation only after
+    // the media is encrypted and the upload is ready to become a message.
+    let memberIds:string[];
+    if(active.pendingContactId){
+      memberIds=[session.user.id,active.pendingContactId];
+    }else{
+      const {data:members,error:membersError}=await supabase.from('kc_conversation_members')
+        .select('user_id').eq('conversation_id',active.id);
+      if(membersError)throw membersError;
+      memberIds=[...new Set((members||[]).map((row:any)=>row.user_id))] as string[];
+    }
+    if(!memberIds.includes(session.user.id))throw new Error('You are no longer a member of this conversation.');
+
+    const {data:devices,error:devicesError}=await supabase.from('kc_e2ee_devices')
+      .select('id,user_id,public_key').in('user_id',memberIds).is('revoked_at',null);
     if(devicesError)throw devicesError;
     const registeredUsers=new Set((devices||[]).map((device:any)=>device.user_id));
     if(memberIds.some(id=>!registeredUsers.has(id)))throw new Error('All chat members must open the latest Guftin build first.');
+
     const plain=new Uint8Array(await file.arrayBuffer());
-    const encrypted=encryptMediaForDevices(plain,devices||[],deviceIdentity,'audio/mp4','voice-message.m4a');plain.fill(0);
-    const objectPath=session.user.id+'/'+conversationId+'/'+Date.now()+'_'+ExpoCrypto.randomUUID()+'.enc';
-    const {error:uploadError}=await supabase.storage.from('chat-media').upload(objectPath,encrypted.ciphertext,{contentType:'application/octet-stream',upsert:false});
+    const encrypted=encryptMediaForDevices(plain,devices||[],deviceIdentity,'audio/mp4','voice-message.m4a');
+    plain.fill(0);
+
+    const pathSegment=active.pendingContactId||active.id;
+    const objectPath=session.user.id+'/'+pathSegment+'/'+Date.now()+'_'+ExpoCrypto.randomUUID()+'.enc';
+    const {error:uploadError}=await supabase.storage.from('chat-media').upload(
+      objectPath,encrypted.ciphertext,{contentType:'application/octet-stream',upsert:false}
+    );
+    encrypted.ciphertext.fill(0);
     if(uploadError)throw uploadError;
-    const {data,error}=await supabase.from('kc_messages').insert({conversation_id:conversationId,sender_id:session.user.id,body:encrypted.body,message_type:'audio',attachment_url:objectPath}).select('id,conversation_id,sender_id,message_type,attachment_url,created_at').single();
-    if(error){await supabase.storage.from('chat-media').remove([objectPath]);throw error;}
-    void dispatchPush('message',data.id);
-    const item=await resolveMessage({...data,body:encrypted.body});
-    setMessages(prev=>({...prev,[conversationId]:[...(prev[conversationId]||[]),item]}));void loadInbox();
+
+    try{
+      const chatToSend=await ensureActiveDirectConversation(active);
+      const conversationId=chatToSend.id;
+      const {data,error}=await supabase.from('kc_messages').insert({
+        conversation_id:conversationId,sender_id:session.user.id,body:encrypted.body,
+        message_type:'audio',attachment_url:objectPath
+      }).select('id,conversation_id,sender_id,message_type,attachment_url,created_at').single();
+      if(error)throw error;
+      void dispatchPush('message',data.id);
+      const item=await resolveMessage({...data,body:encrypted.body});
+      setMessages(prev=>({...prev,[conversationId]:[...(prev[conversationId]||[]),item]}));
+      void loadInbox();
+    }catch(error:any){
+      await supabase.storage.from('chat-media').remove([objectPath]).catch(()=>{});
+      throw error;
+    }
   };
 
   const startVoiceRecording=async()=>{
@@ -2786,11 +2817,15 @@ function GuftinApp() {
     }
     setCallBusy(true);
     try{
-      const callChat=await ensureActiveDirectConversation(active);
-      const {data:members,error:memberError}=await supabase.from('kc_conversation_members')
-        .select('user_id').eq('conversation_id',callChat.id);
-      if(memberError)throw memberError;
-      const memberIds=[...new Set((members||[]).map((row:any)=>row.user_id))] as string[];
+      let memberIds:string[];
+      if(active.pendingContactId){
+        memberIds=[session.user.id,active.pendingContactId];
+      }else{
+        const {data:members,error:memberError}=await supabase.from('kc_conversation_members')
+          .select('user_id').eq('conversation_id',active.id);
+        if(memberError)throw memberError;
+        memberIds=[...new Set((members||[]).map((row:any)=>row.user_id))] as string[];
+      }
       if(!memberIds.includes(session.user.id))throw new Error('You are no longer a member of this conversation.');
       if(callChat.kind==='direct'&&(memberIds.length!==2||memberIds.filter(id=>id!==session.user.id).length!==1))
         throw new Error('This direct call needs exactly one other member.');
@@ -2811,6 +2846,7 @@ function GuftinApp() {
       }finally{
         callKey.fill(0);
       }
+      const callChat=await ensureActiveDirectConversation(active);
       let call:any;
       if(callChat.kind==='group'){
         const {data,error}=await supabase.rpc('kc_create_group_call',{
@@ -3127,7 +3163,7 @@ function GuftinApp() {
     const cleanUsername=contactUsername.trim().toLowerCase().replace(/^@/,'');
     if(!/^[a-z0-9_]{3,24}$/.test(cleanUsername)){Alert.alert('Username not valid','Enter a username such as ali_786.');return;}
     setAdding(true);
-    const {data,error}=await supabase.rpc('kc_add_contact_by_username',{p_username:cleanUsername});
+    const {data,error}=await supabase.rpc('kc_save_contact_by_username',{p_username:cleanUsername});
     setAdding(false);
     if(error){Alert.alert('Could not find contact',error.message);return;}
     const row=Array.isArray(data)?data[0]:data;
