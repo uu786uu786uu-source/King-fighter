@@ -1210,7 +1210,7 @@ function GuftinApp() {
           isOfficial:!!channel?.is_official,isVerified:!!channel?.is_verified,isChannelOwner:channel?.owner_id===session.user.id,
           inviteCode:channel?.invite_code,isPublic:channel?.is_public!==false,ownerId:channel?.owner_id,description:channel?.description||'',
           hasConversationActivity:!!last&&!!last.sender_id&&last.message_type!=='system',hasCallActivity:callActivityIds.has(row.conversation_id)};
-      });
+      }));
       const mapped:Chat[]=sortInboxChats(mappedRows.filter((chat):chat is Chat=>!!chat&&(chat.kind!=='direct'||chat.hasConversationActivity===true||chat.hasCallActivity===true)));
       setChats(prev=>{
         const pending=prev.filter(chat=>chat.kind==='direct'&&chat.hasPendingActivity===true&&!mapped.some(item=>item.id===chat.id));
