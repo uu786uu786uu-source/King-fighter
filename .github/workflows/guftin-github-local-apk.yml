@@ -145,7 +145,5 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" --clobber
           else
-            gh release create "$TAG" "$APK" \\
-              --title "Guftin 1.4.26 — Android build 31" \\
-              --notes "Signed Guftin Android APK. Source: fix/managed-android-call-ringing. Build verified by GitHub Actions."
+            gh release create "$TAG" "$APK" --title "Guftin 1.4.26 — Android build 31" --notes "Signed Guftin Android APK with incoming-call ringtone. Source: fix/managed-android-call-ringing."
           fi
