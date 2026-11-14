@@ -50,7 +50,7 @@ module.exports = ({ config }) => ({
   },
   name: "Guftin",
   slug: "guftin-",
-  version: "1.4.30",
+  version: "1.5.0",
   orientation: "portrait",
   userInterfaceStyle: "light",
   // Keep the app deep-link scheme for Guftin links and email auth callbacks.
@@ -59,7 +59,7 @@ module.exports = ({ config }) => ({
   android: {
     ...config.android,
     package: "com.guftin.app",
-    versionCode: 34,
+    versionCode: 36,
     softwareKeyboardLayoutMode: "resize",
     // Google Mobile Ads 16.0.3 requires the New Architecture; CallKeep overloads are patched during CI install.
     newArchEnabled: true,
@@ -75,6 +75,12 @@ module.exports = ({ config }) => ({
         action: "VIEW",
         autoVerify: false,
         data: [{ scheme: "kingchat", host: "auth", pathPrefix: "/callback" }],
+        category: ["BROWSABLE", "DEFAULT"]
+      },
+      {
+        action: "VIEW",
+        autoVerify: false,
+        data: [{ scheme: "kingchat", host: "channel" }],
         category: ["BROWSABLE", "DEFAULT"]
       }
     ],
@@ -97,7 +103,7 @@ module.exports = ({ config }) => ({
   ios: {
     ...config.ios,
     bundleIdentifier: "com.guftin.app",
-    buildNumber: "15",
+    buildNumber: "16",
     icon: "./assets/guftin-icon.png",
     supportsTablet: true,
     infoPlist: {
