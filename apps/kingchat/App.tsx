@@ -2165,7 +2165,7 @@ function GuftinApp() {
       const patch={title,description,logo_path:savedLogoPath,logo_signed_url:signedLogo,name:title,avatar:initials(title),avatarUrl:signedLogo,color:colorFor(title)};
       setChannels(current=>current.map(row=>row.conversation_id===target.conversation_id?{...row,...patch}:row));
       setChats(current=>current.map(chat=>chat.id===target.conversation_id?{...chat,...patch}:chat));
-      setActive(current=>current?.id===target.conversation_id?{...current,...patch}:current);
+      setActive(current=>current&&current.id===target.conversation_id?({...current,...patch} as Chat):current);
       setChannelEditOpen(false);setChannelLogoAsset(null);
       await Promise.all([loadChannels(),loadInbox()]);
       Alert.alert('Channel updated','The channel name, description and logo are saved centrally. Followers will see the updated branding in Guftin.');
@@ -2291,7 +2291,7 @@ function GuftinApp() {
           const patch={name,avatar:initials(name),avatarUrl:signedLogo,color:colorFor(name),description:row.description||'',logo_path:row.logo_path||null,logo_signed_url:signedLogo};
           setChannels(current=>current.map(item=>item.conversation_id===row.conversation_id?{...item,...row,...patch}:item));
           setChats(current=>current.map(chat=>chat.id===row.conversation_id?{...chat,...patch}:chat));
-          setActive(current=>current?.id===row.conversation_id?{...current,...patch}:current);
+          setActive(current=>current&&current.id===row.conversation_id?({...current,...patch} as Chat):current);
         })();
       })
       .subscribe();
