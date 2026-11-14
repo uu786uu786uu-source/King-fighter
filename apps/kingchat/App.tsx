@@ -255,7 +255,6 @@ const THEMES:any = {
 type Chat = { id:string; name:string; avatar:string; avatarUrl?:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number; isOfficial?:boolean; isVerified?:boolean; isChannelOwner?:boolean; inviteCode?:string; isPublic?:boolean; ownerId?:string; description?:string; hasConversationActivity?:boolean; hasCallActivity?:boolean; pendingContactId?:string; hasPendingActivity?:boolean };
 type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; attachment_url?:string|null; created_at:string; mine:boolean; deleted_at?:string|null; pending?:boolean };
 const sortInboxChats=(items:Chat[])=>items.slice().sort((a,b)=>(Number(!!b.isOfficial)-Number(!!a.isOfficial))||((Number(b.lastAt)||0)-(Number(a.lastAt)||0)));
-const AUTH_REDIRECT_URL = 'kingchat://auth/callback';
 const palette = ['#d49a91','#8796c7','#81ad98','#bd8aa8','#c4a47c','#9a91bd'];
 // Supabase chat-media is currently configured for 50 MB per object. Keep encrypted
 // uploads below that ceiling because authenticated encryption adds a small overhead.
@@ -894,6 +893,9 @@ function GuftinApp() {
   const [email,setEmail]=useState('');
   const [password,setPassword]=useState('');
   const [authError,setAuthError]=useState('');
+  const [signupOtpPending,setSignupOtpPending]=useState(false);
+  const [signupOtp,setSignupOtp]=useState('');
+  const [signupPendingEmail,setSignupPendingEmail]=useState('');
 
   const [addOpen,setAddOpen]=useState(false);
   const [contactUsername,setContactUsername]=useState('');
@@ -3128,16 +3130,45 @@ function GuftinApp() {
     setAuthBusy(true);setAuthError('');
     const {data,error}=await supabase.auth.signUp({
       email:cleanEmail,password,
-      options:{emailRedirectTo:AUTH_REDIRECT_URL,data:{display_name:cleanName,username:cleanUsername}}
+      options:{data:{display_name:cleanName,username:cleanUsername}}
     });
     setAuthBusy(false);
     if(error){setAuthError(error.message);return;}
     if(data.session){
-      setAuthError('');
-    }else{
-      setAuthMode('login');
-      setAuthError('Account created. Check your email inbox and confirm your address, then sign in.');
+      await supabase.auth.signOut();
+      setAuthError('Email confirmation is not enforced on the server. Enable Confirm email in Supabase Auth settings before accepting new accounts.');
+      return;
     }
+    setSignupPendingEmail(cleanEmail);
+    setSignupOtp('');
+    setSignupOtpPending(true);
+    setAuthError('A one-time verification code has been sent to your email. Enter it here in Guftin.');
+  };
+
+  const verifySignupOtp=async()=>{
+    const token=signupOtp.trim();
+    if(!signupPendingEmail){setAuthError('Start account creation again to request a new code.');return;}
+    if(!/^\d{6,8}$/.test(token)){setAuthError('Enter the 6-8 digit code from your email.');return;}
+    setAuthBusy(true);setAuthError('');
+    const {data,error}=await supabase.auth.verifyOtp({email:signupPendingEmail,token,type:'signup'});
+    setAuthBusy(false);
+    if(error){setAuthError(error.message);return;}
+    if(!data.session){setAuthError('Email was verified but no login session was returned. Try signing in.');return;}
+    setSignupOtpPending(false);
+    setSignupOtp('');
+    setSignupPendingEmail('');
+    setAuthError('');
+    setPassword('');
+  };
+
+  const resendSignupOtp=async()=>{
+    if(!signupPendingEmail||authBusy)return;
+    setAuthBusy(true);setAuthError('');
+    const {error}=await supabase.auth.resend({type:'signup',email:signupPendingEmail});
+    setAuthBusy(false);
+    if(error){setAuthError(error.message);return;}
+    setSignupOtp('');
+    setAuthError('A new verification code has been sent. Check your inbox and spam folder.');
   };
 
   const signInEmail=async()=>{
@@ -3435,20 +3466,25 @@ function GuftinApp() {
         </View>
         <Text style={{fontSize:23,fontWeight:'900',color:C.ink,marginBottom:8}}>{authMode==='signup'?'Create your Guftin ID':'Welcome back'}</Text>
         <Text style={{color:C.muted,marginBottom:18,lineHeight:20}}>{authMode==='signup'?'Create an account with email and choose your unique username.':'Sign in with the email and password linked to your account.'}</Text>
-        {authMode==='signup'?<>
-          <TextInput value={fullName} onChangeText={setFullName} placeholder="Your full name" autoCapitalize="words" style={{backgroundColor:C.white,borderRadius:15,padding:16,marginBottom:10,color:C.ink}}/>
-          <TextInput value={username} onChangeText={v=>setUsername(v.toLowerCase().replace(/[^a-z0-9_]/g,''))} placeholder="Choose username (e.g. ali_786)" autoCapitalize="none" style={{backgroundColor:C.white,borderRadius:15,padding:16,marginBottom:10,color:C.ink}}/>
-        </>:null}
-        <TextInput value={email} onChangeText={setEmail} placeholder="Email address" keyboardType="email-address" autoCapitalize="none" autoComplete="email" style={{backgroundColor:C.white,borderRadius:15,padding:16,marginBottom:10,color:C.ink}}/>
-        <TextInput value={password} onChangeText={setPassword} placeholder="Password (at least 8 characters)" secureTextEntry autoCapitalize="none" autoComplete={authMode==='signup'?'new-password':'password'} style={{backgroundColor:C.white,borderRadius:15,padding:16,marginBottom:12,color:C.ink}}/>
-        {authError?<Text style={{color:C.red,fontSize:12,lineHeight:18,marginBottom:12}}>{authError}</Text>:null}
-        <Btn disabled={authBusy} onPress={authMode==='signup'?signUpEmail:signInEmail} style={{backgroundColor:C.green,padding:17,borderRadius:16,alignItems:'center'}}>
-          {authBusy?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'900'}}>{authMode==='signup'?'Create account':'Sign in with email'}</Text>}
-        </Btn>
-        <Btn onPress={()=>{setAuthMode(authMode==='signup'?'login':'signup');setAuthError('');}} style={{padding:16,alignItems:'center'}}>
-          <Text style={{color:C.green,fontWeight:'800'}}>{authMode==='signup'?'Already have an account? Sign in':'New to Guftin? Create account'}</Text>
-        </Btn>
-        <Text style={{color:C.muted,fontSize:10,textAlign:'center',marginTop:8,lineHeight:16}}>Your username is your Guftin ID. Other members can search it to add you. Email confirmation may be required.</Text>
+        {signupOtpPending?<>
+          <Text style={{color:C.muted,fontSize:13,lineHeight:20,marginBottom:14}}>Enter the one-time code sent to {signupPendingEmail}. Do not open an email link; enter the code only in Guftin.</Text>
+          <TextInput value={signupOtp} onChangeText={v=>setSignupOtp(v.replace(/[^0-9]/g,'').slice(0,8))} placeholder="Email verification code" keyboardType="number-pad" autoComplete="one-time-code" maxLength={8} style={{backgroundColor:C.white,borderRadius:15,padding:16,marginBottom:12,color:C.ink,letterSpacing:5,fontSize:20,fontWeight:'900',textAlign:'center'}}/>
+          {authError?<Text style={{color:C.red,fontSize:12,lineHeight:18,marginBottom:12}}>{authError}</Text>:null}
+          <Btn disabled={authBusy} onPress={verifySignupOtp} style={{backgroundColor:C.green,padding:17,borderRadius:16,alignItems:'center'}}>{authBusy?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'900'}}>Verify email and create account</Text>}</Btn>
+          <Btn disabled={authBusy} onPress={resendSignupOtp} style={{padding:13,alignItems:'center'}}><Text style={{color:C.green,fontWeight:'800'}}>Resend verification code</Text></Btn>
+          <Btn disabled={authBusy} onPress={()=>{setSignupOtpPending(false);setSignupOtp('');setSignupPendingEmail('');setAuthError('');}} style={{padding:10,alignItems:'center'}}><Text style={{color:C.muted,fontWeight:'700'}}>Back to sign up</Text></Btn>
+        </>:<>
+          {authMode==='signup'?<>
+            <TextInput value={fullName} onChangeText={setFullName} placeholder="Your full name" autoCapitalize="words" style={{backgroundColor:C.white,borderRadius:15,padding:16,marginBottom:10,color:C.ink}}/>
+            <TextInput value={username} onChangeText={v=>setUsername(v.toLowerCase().replace(/[^a-z0-9_]/g,''))} placeholder="Choose username (e.g. ali_786)" autoCapitalize="none" style={{backgroundColor:C.white,borderRadius:15,padding:16,marginBottom:10,color:C.ink}}/>
+          </>:null}
+          <TextInput value={email} onChangeText={setEmail} placeholder="Email address" keyboardType="email-address" autoCapitalize="none" autoComplete="email" style={{backgroundColor:C.white,borderRadius:15,padding:16,marginBottom:10,color:C.ink}}/>
+          <TextInput value={password} onChangeText={setPassword} placeholder="Password (at least 8 characters)" secureTextEntry autoCapitalize="none" autoComplete={authMode==='signup'?'new-password':'password'} style={{backgroundColor:C.white,borderRadius:15,padding:16,marginBottom:12,color:C.ink}}/>
+          {authError?<Text style={{color:C.red,fontSize:12,lineHeight:18,marginBottom:12}}>{authError}</Text>:null}
+          <Btn disabled={authBusy} onPress={authMode==='signup'?signUpEmail:signInEmail} style={{backgroundColor:C.green,padding:17,borderRadius:16,alignItems:'center'}}>{authBusy?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'900'}}>{authMode==='signup'?'Create account':'Sign in with email'}</Text>}</Btn>
+          <Btn onPress={()=>{setAuthMode(authMode==='signup'?'login':'signup');setAuthError('');}} style={{padding:16,alignItems:'center'}}><Text style={{color:C.green,fontWeight:'800'}}>{authMode==='signup'?'Already have an account? Sign in':'New to Guftin? Create account'}</Text></Btn>
+          <Text style={{color:C.muted,fontSize:10,textAlign:'center',marginTop:8,lineHeight:16}}>New registrations require email OTP verification. After successful verification, Guftin saves your session on this phone.</Text>
+        </>}
       </ScrollView>
     </SafeAreaView>;
   }
