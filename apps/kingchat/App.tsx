@@ -2831,9 +2831,9 @@ function GuftinApp() {
         memberIds=[...new Set((members||[]).map((row:any)=>row.user_id))] as string[];
       }
       if(!memberIds.includes(session.user.id))throw new Error('You are no longer a member of this conversation.');
-      if(callChat.kind==='direct'&&(memberIds.length!==2||memberIds.filter(id=>id!==session.user.id).length!==1))
+      if(active.kind==='direct'&&(memberIds.length!==2||memberIds.filter(id=>id!==session.user.id).length!==1))
         throw new Error('This direct call needs exactly one other member.');
-      if(callChat.kind==='group'&&(memberIds.length<2||memberIds.length>20))
+      if(active.kind==='group'&&(memberIds.length<2||memberIds.length>20))
         throw new Error('Group calls need 2–20 group members, including you.');
       const {data:devices,error:devicesError}=await supabase.from('kc_e2ee_devices')
         .select('id,user_id,public_key').in('user_id',memberIds).is('revoked_at',null);
