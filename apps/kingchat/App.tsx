@@ -3684,7 +3684,17 @@ function GuftinApp() {
       {searching?<TextInput value={search} onChangeText={setSearch} placeholder="Search your conversations..." autoFocus style={{marginHorizontal:20,marginBottom:12,padding:14,backgroundColor:C.paper,borderRadius:14,color:C.ink}}/>:null}
       {loading&&chats.length===0?<View style={{flex:1,alignItems:'center',justifyContent:'center'}}><ActivityIndicator color={C.green}/><Text style={{color:C.muted,marginTop:10}}>Loading your conversations…</Text></View>:
         <FlatList data={visible} keyExtractor={x=>x.id} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={C.green}/>} contentContainerStyle={{paddingHorizontal:13,paddingBottom:25,flexGrow:1}}
-          ListEmptyComponent={<View style={{alignItems:'center',padding:35,marginTop:50}}><Avatar label="K" color={C.green} size={64}/><Text style={{fontSize:17,fontWeight:'900',color:C.ink,marginTop:15}}>No conversations yet</Text><Text style={{color:C.muted,textAlign:'center',marginTop:7,lineHeight:20}}>Tap ＋ and search by a person's unique username to start a real chat.</Text><Btn onPress={()=>setAddOpen(true)} style={{backgroundColor:C.green,paddingHorizontal:22,paddingVertical:13,borderRadius:14,marginTop:18}}><Text style={{color:'#fff',fontWeight:'800'}}>Find by username</Text></Btn></View>}
+          ListHeaderComponent={<View style={{paddingTop:4,paddingBottom:12}}>
+            <Btn onPress={()=>setAddOpen(true)} style={{flexDirection:'row',alignItems:'center',gap:12,padding:13,borderRadius:16,backgroundColor:C.mint}}>
+              <View style={{width:42,height:42,borderRadius:14,backgroundColor:C.green,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:26,color:'#fff',fontWeight:'700'}}>＋</Text></View>
+              <View style={{flex:1}}>
+                <Text style={{fontSize:14,fontWeight:'900',color:C.green}}>Add a new contact</Text>
+                <Text style={{fontSize:11,color:C.muted,marginTop:3}}>Find registered people by their Guftin username</Text>
+              </View>
+              <Text style={{fontSize:22,color:C.green,fontWeight:'700'}}>›</Text>
+            </Btn>
+          </View>}
+          ListEmptyComponent={<View style={{alignItems:'center',padding:35,marginTop:34}}><Avatar label="K" color={C.green} size={64}/><Text style={{fontSize:17,fontWeight:'900',color:C.ink,marginTop:15}}>No conversations yet</Text><Text style={{color:C.muted,textAlign:'center',marginTop:7,lineHeight:20}}>Add a contact above using their unique username. Your chat appears when you send the first message or start a call.</Text></View>}
           renderItem={({item})=><Btn onPress={()=>openChat(item)} onLongPress={()=>Alert.alert('Chat options',item.name,[{text:'Delete chat for me',style:'destructive',onPress:()=>void hideChat(item)},{text:'Cancel',style:'cancel'}])} style={{flexDirection:'row',alignItems:'center',padding:10,gap:12,borderRadius:17}}>
             <Avatar label={item.avatar} color={item.color} online={item.online} uri={item.avatarUrl}/>
             <View style={{flex:1,borderBottomWidth:1,borderColor:C.line,paddingBottom:14,paddingTop:2}}>
@@ -3921,13 +3931,14 @@ function GuftinApp() {
     <Modal visible={addOpen} transparent animationType="fade" onRequestClose={()=>setAddOpen(false)}>
       <View style={{flex:1,backgroundColor:'#0008',justifyContent:'center',padding:22}}>
         <View style={{backgroundColor:C.white,borderRadius:22,padding:22}}>
-          <Text style={{fontSize:20,fontWeight:'900',color:C.ink}}>Find a Guftin user</Text>
-          <Text style={{color:C.muted,lineHeight:19,marginTop:7,marginBottom:16}}>Search by their exact username. Example: ali_786</Text>
+          <Text style={{fontSize:20,fontWeight:'900',color:C.ink}}>Add a new Guftin contact</Text>
+          <Text style={{color:C.muted,lineHeight:19,marginTop:7,marginBottom:16}}>Enter the exact username of a registered Guftin user. Example: ali_786</Text>
           <TextInput value={contactUsername} onChangeText={v=>setContactUsername(v.toLowerCase().replace(/[^a-z0-9_]/g,''))} autoCapitalize="none" placeholder="Username (without @)" style={{backgroundColor:C.paper,borderRadius:14,padding:15,color:C.ink}}/>
+          <Text style={{color:C.muted,fontSize:11,lineHeight:16,marginTop:9}}>The contact is saved to your Guftin contacts. A conversation is created only when you send the first message or place a call.</Text>
           <Btn onPress={()=>{setAddOpen(false);void openGroupCreator();}} style={{padding:12,alignSelf:'flex-start',marginTop:12}}><Text style={{color:C.green,fontWeight:'800'}}>👥 Create a group instead</Text></Btn>
           <View style={{flexDirection:'row',justifyContent:'flex-end',gap:10,marginTop:18}}>
             <Btn onPress={()=>setAddOpen(false)} style={{padding:13}}><Text style={{color:C.muted,fontWeight:'700'}}>Cancel</Text></Btn>
-            <Btn disabled={adding} onPress={addContact} style={{backgroundColor:C.green,paddingHorizontal:18,paddingVertical:13,borderRadius:13}}>{adding?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'800'}}>Find and add</Text>}</Btn>
+            <Btn disabled={adding} onPress={addContact} style={{backgroundColor:C.green,paddingHorizontal:18,paddingVertical:13,borderRadius:13}}>{adding?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'800'}}>Add contact</Text>}</Btn>
           </View>
         </View>
       </View>
