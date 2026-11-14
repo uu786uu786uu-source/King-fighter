@@ -21,7 +21,7 @@ permissions:
 
 concurrency:
   group: guftin-github-android-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   android-apk:
