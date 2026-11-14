@@ -615,7 +615,8 @@ function SecureLiveKitRoom({liveCall,onDisconnected,onHangUp,onConnected}:any) {
     options={{e2ee:{e2eeManager}}}
     onConnected={onConnected}
     onDisconnected={async()=>{
-      if(activeGuftinCallRoom?.callId===liveCall.id)activeGuftinCallRoom.disconnected=true;
+      const roomController=activeGuftinCallRoom;
+      if(roomController?.callId===liveCall.id)roomController.disconnected=true;
       await stopGuftinCallAudioSession();
       await onDisconnected?.();
     }}
