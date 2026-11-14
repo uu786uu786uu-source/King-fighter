@@ -35,7 +35,7 @@ with check (
  bucket_id='call-recordings' and (storage.foldername(name))[1]=(select auth.uid())::text
  and exists (select 1 from public.kc_call_logs c where c.id=((storage.foldername(name))[2])::uuid
   and (c.caller_id=(select auth.uid()) or c.callee_id=(select auth.uid()) or exists (
-   select 1 from public.kc_call_participants cp where cp.call_id=c.id and cp.user_id=(select auth.uid()) and cp.status='accepted'
+   select 1 from public.kc_call_participants cp where cp.call_id=c.id and cp.user_id=(select auth.uid()) and cp.status in ('accepted','left')
   )))
 );
 drop policy if exists "participants read Guftin call recordings" on storage.objects;

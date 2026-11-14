@@ -622,7 +622,7 @@ function CallRoomScreen({callId,callType,onHangUp,callScope,sessionUserId}:any) 
           numColumns={2} columnWrapperStyle={{gap:9}} style={{flex:1}}
           contentContainerStyle={{gap:9,paddingBottom:12,flexGrow:1}}
           renderItem={({item}:any)=>isTrackReference(item)
-            ?<View style={{width:'100%',height:190,borderRadius:16,overflow:'hidden',backgroundColor:'#1b3832',borderWidth:1,borderColor:'#47766c'}}>
+            ?<View style={{flex:1,height:190,borderRadius:16,overflow:'hidden',backgroundColor:'#1b3832',borderWidth:1,borderColor:'#47766c'}}>
               <VideoTrack trackRef={item} style={{width:'100%',height:'100%'}}/>
               <View style={{position:'absolute',left:8,bottom:8,paddingHorizontal:8,paddingVertical:4,backgroundColor:'#061b18cc',borderRadius:8}}>
                 <Text style={{fontSize:10,color:'#fff',fontWeight:'800'}} numberOfLines={1}>{item.participant?.name||item.participant?.identity||'Participant'}</Text>
