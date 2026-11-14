@@ -3419,7 +3419,10 @@ function GuftinApp() {
             {permissionSetupBusy?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'900'}}>{step.key==='autoSave'?'Save choice':'Allow'}</Text>}
           </Btn>
         </View>
-        <Text style={{fontSize:10,color:C.muted,textAlign:'center',lineHeight:16,marginTop:18}}>Contacts and location permission are not needed for username-based Guftin chats. Android only grants access when you choose Allow.</Text>
+        <Btn disabled={permissionSetupBusy} onPress={()=>void finishPermissionSetup()} style={{paddingVertical:14,paddingHorizontal:12,alignItems:'center',marginTop:7}}>
+          <Text style={{color:C.green,fontWeight:'900'}}>Skip setup for now</Text>
+        </Btn>
+        <Text style={{fontSize:10,color:C.muted,textAlign:'center',lineHeight:16,marginTop:8}}>You can allow each permission later when you use the feature. Contacts and location access are not needed for username-based Guftin chats. Android only grants access when you choose Allow.</Text>
       </ScrollView>
     </SafeAreaView>;
   }
