@@ -10,8 +10,48 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
   headers: { ...corsHeaders, "Content-Type": "application/json" },
 });
 
+async function loadAllChannelMembers(admin: any, conversationId: string, excludeUserId: string) {
+  const ids: string[] = [];
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await admin.from("kc_channel_members")
+      .select("user_id")
+      .eq("conversation_id", conversationId)
+      .neq("user_id", excludeUserId)
+      .order("user_id", { ascending: true })
+      .range(offset, offset + 999);
+    if (error) throw error;
+    const rows = data || [];
+    ids.push(...rows.map((row: any) => row.user_id).filter(Boolean));
+    if (rows.length < 1000) break;
+  }
+  return [...new Set(ids)];
+}
+
+async function loadAllRecipientDevices(admin: any, recipientIds: string[]) {
+  const byToken = new Map<string, { token: string; platform: string }>();
+  for (let offset = 0; offset < recipientIds.length; offset += 400) {
+    const userBatch = recipientIds.slice(offset, offset + 400);
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await admin.from("kc_device_tokens")
+        .select("id,token,platform")
+        .in("user_id", userBatch)
+        .order("id", { ascending: true })
+        .range(from, from + 999);
+      if (error) throw error;
+      const rows = data || [];
+      for (const row of rows) {
+        if (typeof row.token === "string" && row.token.startsWith("ExponentPushToken[")) {
+          byToken.set(row.token, { token: row.token, platform: String(row.platform || "").toLowerCase() });
+        }
+      }
+      if (rows.length < 1000) break;
+    }
+  }
+  return [...byToken.values()];
+}
+
 type PushBody = {
-  kind?: "test" | "message" | "call" | "status" | "status_like" | "status_view";
+  kind?: "test" | "message" | "official_broadcast" | "call" | "status" | "status_like" | "status_view";
   message_id?: string;
   call_id?: string;
   status_id?: string;
@@ -72,6 +112,32 @@ Deno.serve(async (req: Request) => {
       row.message_type === "file" ? "sent you an attachment." :
       "sent you a message.";
     data = { type: "message", conversation_id: row.conversation_id, message_id: row.id };
+  } else if (body.kind === "official_broadcast" && body.message_id) {
+    const { data: row, error } = await admin.from("kc_messages")
+      .select("id,conversation_id,sender_id,message_type,body,deleted_at")
+      .eq("id", body.message_id).maybeSingle();
+    if (error || !row || row.sender_id !== actor.id || row.deleted_at) {
+      return json({ error: "Official post not found or not owned by this account." }, 404);
+    }
+    const { data: channel, error: channelError } = await admin.from("kc_channels")
+      .select("conversation_id,owner_id,is_official,is_verified,title")
+      .eq("conversation_id", row.conversation_id).maybeSingle();
+    if (channelError || !channel || !channel.is_official || !channel.is_verified || channel.owner_id !== actor.id) {
+      return json({ error: "Only the verified Guftin Official owner can broadcast to all users." }, 403);
+    }
+    try {
+      recipientIds = await loadAllChannelMembers(admin, row.conversation_id, actor.id);
+    } catch {
+      return json({ error: "Could not load all Guftin Official followers." }, 500);
+    }
+    title = "Guftin Official";
+    message = row.message_type === "image" ? "Shared a new official photo." :
+      row.message_type === "video" ? "Shared a new official video." :
+      row.message_type === "file" ? "Shared a new official attachment." :
+      (typeof row.body === "string" && row.body.trim() ? row.body.trim().slice(0, 160) : "A new official update is available.");
+    data = { type: "message", subtype: "official_broadcast", conversation_id: row.conversation_id, message_id: row.id, official: true, verified: true };
+    channelId = "messages";
+    ttl = 60 * 60 * 24;
   } else if (body.kind === "call" && body.call_id) {
     const { data: row, error } = await admin.from("kc_call_logs")
       .select("id,conversation_id,caller_id,callee_id,call_type,status,call_scope")
@@ -119,16 +185,31 @@ Deno.serve(async (req: Request) => {
     if (error || !row || row.user_id !== actor.id || new Date(row.expires_at).getTime() <= Date.now()) {
       return json({ error: "Active status not found or not owned by this account." }, 404);
     }
-    const { data: contacts, error: contactsError } = await admin.from("kc_contacts")
-      .select("owner_id,contact_id")
-      .or("owner_id.eq." + actor.id + ",contact_id.eq." + actor.id);
-    if (contactsError) return json({ error: "Could not load status contacts." }, 500);
-    recipientIds = [...new Set((contacts || []).map((item: any) =>
-      item.owner_id === actor.id ? item.contact_id : item.owner_id
-    ).filter((id: string) => id && id !== actor.id))];
-    title = actorName + " shared a status";
-    message = "Tap to view the new status. It expires after 24 hours.";
-    data = { type: "status", status_id: row.id };
+    const { data: officialChannel, error: officialError } = await admin.from("kc_channels")
+      .select("conversation_id,owner_id,is_official,is_verified")
+      .eq("is_official", true).maybeSingle();
+    if (officialError) return json({ error: "Could not verify the Guftin Official account." }, 500);
+    if (officialChannel?.owner_id === actor.id && officialChannel.is_verified) {
+      try {
+        recipientIds = await loadAllChannelMembers(admin, officialChannel.conversation_id, actor.id);
+      } catch {
+        return json({ error: "Could not load all Guftin Official followers." }, 500);
+      }
+      title = "Guftin Official";
+      message = "Shared a new official status. Tap to view it.";
+      data = { type: "status", subtype: "official_status", status_id: row.id, official: true, verified: true };
+    } else {
+      const { data: contacts, error: contactsError } = await admin.from("kc_contacts")
+        .select("owner_id,contact_id")
+        .or("owner_id.eq." + actor.id + ",contact_id.eq." + actor.id);
+      if (contactsError) return json({ error: "Could not load status contacts." }, 500);
+      recipientIds = [...new Set((contacts || []).map((item: any) =>
+        item.owner_id === actor.id ? item.contact_id : item.owner_id
+      ).filter((id: string) => id && id !== actor.id))];
+      title = actorName + " shared a status";
+      message = "Tap to view the new status. It expires after 24 hours.";
+      data = { type: "status", status_id: row.id };
+    }
   } else if ((body.kind === "status_like" || body.kind === "status_view") && body.status_id) {
     const { data: row, error } = await admin.from("kc_status_updates")
       .select("id,user_id,expires_at").eq("id", body.status_id).maybeSingle();
@@ -159,14 +240,24 @@ Deno.serve(async (req: Request) => {
   recipientIds = [...new Set(recipientIds.filter((id) => id && (body.kind === "test" || id !== actor.id)))];
   if (!recipientIds.length) return json({ sent: 0, reason: "No recipients." });
 
-  const { data: devices, error: tokenError } = await admin.from("kc_device_tokens")
-    .select("token,platform").in("user_id", recipientIds);
-  if (tokenError) return json({ error: "Could not load recipient devices." }, 500);
-
-  const targets = [...new Map((devices || [])
-    .filter((item: any) => typeof item.token === "string" && item.token.startsWith("ExponentPushToken["))
-    .map((item: any) => [item.token, { token: item.token, platform: String(item.platform || "").toLowerCase() }])
-  ).values()];
+  let targets: { token: string; platform: string }[];
+  if (body.kind === "official_broadcast" || (
+    body.kind === "status" && data.subtype === "official_status"
+  )) {
+    try {
+      targets = await loadAllRecipientDevices(admin, recipientIds);
+    } catch {
+      return json({ error: "Could not load all Guftin Official devices." }, 500);
+    }
+  } else {
+    const { data: devices, error: tokenError } = await admin.from("kc_device_tokens")
+      .select("token,platform").in("user_id", recipientIds);
+    if (tokenError) return json({ error: "Could not load recipient devices." }, 500);
+    targets = [...new Map((devices || [])
+      .filter((item: any) => typeof item.token === "string" && item.token.startsWith("ExponentPushToken["))
+      .map((item: any) => [item.token, { token: item.token, platform: String(item.platform || "").toLowerCase() }])
+    ).values()];
+  }
   if (!targets.length) return json({ sent: 0, reason: "Recipients have not enabled push notifications on a device." });
 
   const notifications = targets.map(({ token, platform }) => {
