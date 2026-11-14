@@ -254,6 +254,7 @@ const THEMES:any = {
 };
 type Chat = { id:string; name:string; avatar:string; avatarUrl?:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number; isOfficial?:boolean; isVerified?:boolean; isChannelOwner?:boolean; inviteCode?:string; isPublic?:boolean; ownerId?:string; description?:string };
 type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; attachment_url?:string|null; created_at:string; mine:boolean; deleted_at?:string|null; pending?:boolean };
+const sortInboxChats=(items:Chat[])=>items.slice().sort((a,b)=>(Number(!!b.isOfficial)-Number(!!a.isOfficial))||((Number(b.lastAt)||0)-(Number(a.lastAt)||0)));
 const AUTH_REDIRECT_URL = 'kingchat://auth/callback';
 const palette = ['#d49a91','#8796c7','#81ad98','#bd8aa8','#c4a47c','#9a91bd'];
 // Supabase chat-media is currently configured for 50 MB per object. Keep encrypted
@@ -803,6 +804,10 @@ function VideoBubble({uri}:{uri:string}) {
   return <VideoView player={player} style={{width:260,height:210,borderRadius:12}} nativeControls allowsFullscreen contentFit="contain"/>;
 }
 
+function VerifiedBadge({label='Verified account'}:{label?:string}) {
+  return <Text accessibilityRole="image" accessibilityLabel={label} style={{color:'#2387e8',fontWeight:'900',fontSize:14,marginLeft:3}}>✓</Text>;
+}
+
 function GuftinApp() {
   const insets=useSafeAreaInsets();
   const [tab,setTab]=useState('Chats');
@@ -1122,7 +1127,7 @@ function GuftinApp() {
     const inboxCacheKey='guftin-cache-inbox:'+session.user.id;
     try{
       const cached=await AsyncStorage.getItem(inboxCacheKey);
-      if(cached){const parsed=JSON.parse(cached);if(Array.isArray(parsed)){setChats(parsed);setLoading(false);}}
+      if(cached){const parsed=JSON.parse(cached);if(Array.isArray(parsed)){setChats(sortInboxChats(parsed as Chat[]));setLoading(false);}}
     }catch{ /* Ignore a damaged local inbox cache and try the server. */ }
     try{
       const {data:memberships,error}=await supabase.from('kc_conversation_members')
@@ -1153,7 +1158,7 @@ function GuftinApp() {
       const profileMap=new Map(profiles.filter(p=>peerIds.includes(p.id)).map(p=>[p.id,p]));
       const latest=new Map<string,any>();
       for(const message of inboxMessages) if(!latest.has(message.conversation_id)) latest.set(message.conversation_id,message);
-      const mapped:Chat[]=(await Promise.all(rows.map(async row=>{
+      const mapped:Chat[]=sortInboxChats(await Promise.all(rows.map(async row=>{
         const conv=row.conversation||{};
         const peers=members.filter(m=>m.conversation_id===row.conversation_id&&m.user_id!==session.user.id);
         const peer=peers.length?profileMap.get(peers[0].user_id):null;
@@ -1189,7 +1194,7 @@ function GuftinApp() {
           lastAt:last?new Date(last.created_at).getTime():new Date(conv.updated_at||row.joined_at).getTime(),
           isOfficial:!!channel?.is_official,isVerified:!!channel?.is_verified,isChannelOwner:channel?.owner_id===session.user.id,
           inviteCode:channel?.invite_code,isPublic:channel?.is_public!==false,ownerId:channel?.owner_id,description:channel?.description||''};
-      }))).sort((a,b)=>b.lastAt-a.lastAt);
+      })));
       setChats(mapped);
       void AsyncStorage.setItem(inboxCacheKey,JSON.stringify(mapped)).catch(()=>{});
     }catch(e:any){
@@ -1468,6 +1473,10 @@ function GuftinApp() {
 
   const hideChat=async(chat:Chat)=>{
     if(!session)return;
+    if(chat.isOfficial){
+      Alert.alert('Guftin Official stays in your inbox','The verified official chat is kept visible so you do not miss important announcements.');
+      return;
+    }
     const {error}=await supabase.from('kc_conversation_members')
       .update({hidden_at:new Date().toISOString()})
       .eq('conversation_id',chat.id).eq('user_id',session.user.id);
@@ -3456,7 +3465,7 @@ function GuftinApp() {
         <Btn onPress={()=>setActive(null)} style={{padding:10}}><Text style={{fontSize:24,color:C.ink}}>‹</Text></Btn>
         <Avatar label={active.avatar} color={active.color} size={43} online={active.online} uri={active.avatarUrl}/>
         <Btn onPress={()=>active.kind==='channel'?showChannelOptions():void openChatDetails()} style={{flex:1,marginLeft:11,alignItems:'flex-start'}}>
-          <View style={{flexDirection:'row',alignItems:'center',gap:5}}><Text numberOfLines={1} style={{fontWeight:'900',fontSize:15,color:C.ink}}>{active.name}</Text>{active.isVerified?<Text style={{color:'#2387e8',fontWeight:'900'}}>●✓</Text>:null}</View>
+          <View style={{flexDirection:'row',alignItems:'center',gap:5}}><Text numberOfLines={1} style={{fontWeight:'900',fontSize:15,color:C.ink}}>{active.name}</Text>{active.isVerified?<VerifiedBadge label={active.isOfficial?'Verified Guftin Official account':'Verified channel'}/>:null}</View>
           <Text style={{fontSize:11,color:active.isOfficial?C.green:active.online?C.green:C.muted}}>{active.kind==='channel'?(active.isOfficial?'Official Guftin announcements':active.isChannelOwner?'Your channel · publish updates':'Channel · read-only'):active.kind==='group'?'Tap for group info':outgoingCall?'Calling…':active.online?'● online':'Tap for contact info'}</Text>
         </Btn>
         {active.kind!=='channel'?(outgoingCall?<Btn onPress={()=>void endCall(outgoingCall.id)} style={{backgroundColor:'#fde8e8',borderRadius:15,width:62,height:58,alignItems:'center',justifyContent:'center',borderWidth:1,borderColor:'#f3c6c6'}}><Text style={{fontSize:11,fontWeight:'900',color:C.red}}>Cancel</Text><Text style={{fontSize:9,color:C.red}}>call</Text></Btn>:<>
@@ -3583,7 +3592,7 @@ function GuftinApp() {
           renderItem={({item})=><Btn onPress={()=>openChat(item)} onLongPress={()=>Alert.alert('Chat options',item.name,[{text:'Delete chat for me',style:'destructive',onPress:()=>void hideChat(item)},{text:'Cancel',style:'cancel'}])} style={{flexDirection:'row',alignItems:'center',padding:10,gap:12,borderRadius:17}}>
             <Avatar label={item.avatar} color={item.color} online={item.online} uri={item.avatarUrl}/>
             <View style={{flex:1,borderBottomWidth:1,borderColor:C.line,paddingBottom:14,paddingTop:2}}>
-              <View style={{flexDirection:'row',justifyContent:'space-between',alignItems:'center'}}><View style={{flexDirection:'row',alignItems:'center',gap:4,flex:1}}><Text numberOfLines={1} style={{fontWeight:'800',color:C.ink,fontSize:14}}>{item.name}</Text>{item.isVerified?<Text style={{color:'#2387e8',fontWeight:'900',fontSize:12}}>●✓</Text>:null}</View><Text style={{fontSize:10,color:C.muted}}>{item.time}</Text></View>
+              <View style={{flexDirection:'row',justifyContent:'space-between',alignItems:'center'}}><View style={{flexDirection:'row',alignItems:'center',gap:4,flex:1}}><Text numberOfLines={1} style={{fontWeight:'800',color:C.ink,fontSize:14}}>{item.name}</Text>{<>{item.isOfficial?<Text style={{fontSize:9,color:'#2387e8',fontWeight:'900'}}>OFFICIAL</Text>:null}{item.isVerified?<VerifiedBadge label={item.isOfficial?'Verified Guftin Official account':'Verified channel'}/>:null}</>}</View><Text style={{fontSize:10,color:C.muted}}>{item.time}</Text></View>
               <View style={{flexDirection:'row',alignItems:'center',gap:8,marginTop:6}}>
                 <Text numberOfLines={1} style={{fontSize:12,color:C.muted,flex:1}}>{item.last}</Text>
                 {item.unread>0?<View style={{minWidth:20,height:20,paddingHorizontal:6,borderRadius:10,backgroundColor:C.green,alignItems:'center',justifyContent:'center'}}>
@@ -3607,7 +3616,7 @@ function GuftinApp() {
       {statuses.length===0?<Text style={{color:C.muted,textAlign:'center',padding:30}}>No active statuses from your contacts yet.</Text>:statuses.map((status:any)=><View key={status.id} style={{padding:14,borderBottomWidth:1,borderColor:C.line,flexDirection:'row',gap:12}}>
         <Avatar label={initials(status.display_name)} color={colorFor(status.user_id)} size={46} uri={status.avatar_signed_url}/>
         <View style={{flex:1}}>
-          <View style={{flexDirection:'row',alignItems:'center',gap:5,flexWrap:'wrap'}}><Text style={{fontWeight:'900',color:C.ink}}>{status.user_id===session.user.id?'You':status.display_name}{status.username?'  @'+status.username:''}</Text>{status.is_verified?<Text style={{color:'#2387e8',fontSize:13,fontWeight:'900'}}>●✓</Text>:null}</View>
+          <View style={{flexDirection:'row',alignItems:'center',gap:5,flexWrap:'wrap'}}><Text style={{fontWeight:'900',color:C.ink}}>{status.user_id===session.user.id?'You':status.display_name}{status.username?'  @'+status.username:''}</Text>{status.is_verified?<VerifiedBadge label="Verified Guftin Official account"/>:null}</View>
           {status.media_signed_url?(status.media_url?.toLowerCase().match(/\.(mp4|mov|m4v)$/)?<VideoBubble uri={status.media_signed_url}/>:<Image source={{uri:status.media_signed_url}} style={{width:210,height:190,borderRadius:14,marginTop:8}} resizeMode="cover"/>):null}
           {status.caption?<Text style={{color:C.ink,lineHeight:20,marginTop:5}}>{status.caption}</Text>:null}
           <Text style={{color:C.muted,fontSize:10,marginTop:5}}>{timeLabel(status.created_at)} · {status.status_count} status update{status.status_count===1?'':'s'} from this person</Text>
@@ -3637,7 +3646,7 @@ function GuftinApp() {
         :channels.filter(channel=>channel.owner_id===session.user.id).map(channel=><View key={channel.conversation_id} style={{backgroundColor:C.white,borderRadius:17,padding:13,marginBottom:9,borderWidth:1,borderColor:C.line}}>
           <View style={{flexDirection:'row',alignItems:'center',gap:11}}>
             <View style={{width:46,height:46,borderRadius:16,backgroundColor:C.mint,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:21,color:C.green}}>◈</Text></View>
-            <View style={{flex:1}}><Text style={{fontSize:14,fontWeight:'900',color:C.ink}}>{channel.title||'My channel'}{channel.is_verified?<Text style={{color:'#2387e8'}}> ●✓</Text>:null}</Text><Text style={{fontSize:10,color:C.muted,marginTop:3}}>{channel.is_public?'Public channel':'Private · invite link only'} · Owner</Text></View>
+            <View style={{flex:1}}><Text style={{fontSize:14,fontWeight:'900',color:C.ink}}>{channel.title||'My channel'}{channel.is_verified?<VerifiedBadge label="Verified channel"/>:null}</Text><Text style={{fontSize:10,color:C.muted,marginTop:3}}>{channel.is_public?'Public channel':'Private · invite link only'} · Owner</Text></View>
             <Btn onPress={()=>void shareChannelInvite(channel)} style={{padding:9,borderRadius:11,backgroundColor:C.mint}}><Text style={{fontSize:11,color:C.green,fontWeight:'900'}}>Invite ↗</Text></Btn>
           </View>
           <Text numberOfLines={2} style={{fontSize:11,color:C.muted,lineHeight:16,marginTop:8}}>{channel.description||'No channel description'}</Text>
@@ -3648,7 +3657,7 @@ function GuftinApp() {
         ?<Text style={{fontSize:12,color:C.muted}}>No public channels to discover yet. Share your own channel link to invite followers.</Text>
         :channels.filter(channel=>channel.owner_id!==session.user.id).map(channel=><View key={channel.conversation_id} style={{flexDirection:'row',alignItems:'center',gap:11,padding:12,borderBottomWidth:1,borderColor:C.line}}>
           <View style={{width:44,height:44,borderRadius:15,backgroundColor:C.mint,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:20,color:C.green}}>◈</Text></View>
-          <View style={{flex:1}}><Text style={{fontSize:13,fontWeight:'900',color:C.ink}}>{channel.is_official?'Guftin Official':(channel.title||'Guftin channel')}{channel.is_verified?<Text style={{color:'#2387e8'}}> ●✓</Text>:null}</Text><Text numberOfLines={2} style={{fontSize:10,color:C.muted,marginTop:3}}>{channel.description|| (channel.is_public?'Public channel':'Private channel')}</Text></View>
+          <View style={{flex:1}}><Text style={{fontSize:13,fontWeight:'900',color:C.ink}}>{channel.is_official?'Guftin Official':(channel.title||'Guftin channel')}{channel.is_verified?<VerifiedBadge label="Verified channel"/>:null}</Text><Text numberOfLines={2} style={{fontSize:10,color:C.muted,marginTop:3}}>{channel.description|| (channel.is_public?'Public channel':'Private channel')}</Text></View>
           {channel.isFollowing?<Btn onPress={()=>openChannelChat(channel)} style={{paddingHorizontal:13,paddingVertical:9,borderRadius:11,backgroundColor:C.mint}}><Text style={{color:C.green,fontWeight:'900',fontSize:11}}>Open</Text></Btn>
             :channel.is_public?<Btn disabled={channelBusy} onPress={()=>void followPublicChannel(channel)} style={{paddingHorizontal:13,paddingVertical:9,borderRadius:11,backgroundColor:C.green}}><Text style={{color:'#fff',fontWeight:'900',fontSize:11}}>Follow</Text></Btn>
             :<Btn onPress={()=>setChannelJoinOpen(true)} style={{paddingHorizontal:13,paddingVertical:9,borderRadius:11,backgroundColor:C.paper}}><Text style={{color:C.green,fontWeight:'900',fontSize:11}}>Invite only</Text></Btn>}
@@ -3705,7 +3714,7 @@ function GuftinApp() {
       />
     </View>:null}
     <View style={{height:66+insets.bottom,paddingTop:5,paddingBottom:Math.max(insets.bottom,6),borderTopWidth:1,borderColor:C.line,flexDirection:'row',alignItems:'center',justifyContent:'space-around',backgroundColor:C.white,elevation:8}}>
-      {([['Chats','▤'],['Updates','◉'],['Channels','◈'],['Calls','⌕'],['You','●']] as string[][].map(([t,icon])=><Btn key={t} onPress={()=>setTab(t)} style={{alignItems:'center',minWidth:58}}><Text style={{fontSize:19,color:tab===t?C.green:C.muted}}>{icon}</Text><Text style={{fontSize:10,fontWeight:tab===t?'900':'600',color:tab===t?C.green:C.muted,marginTop:3}}>{t}</Text></Btn>)}
+      {([['Chats','▤'],['Updates','◉'],['Channels','◈'],['Calls','⌕'],['You','●']] as string[][]).map(([t,icon])=><Btn key={t} onPress={()=>setTab(t)} style={{alignItems:'center',minWidth:58}}><Text style={{fontSize:19,color:tab===t?C.green:C.muted}}>{icon}</Text><Text style={{fontSize:10,fontWeight:tab===t?'900':'600',color:tab===t?C.green:C.muted,marginTop:3}}>{t}</Text></Btn>)}
     </View>
 
     <Modal visible={groupCreateOpen} transparent animationType="slide" onRequestClose={()=>setGroupCreateOpen(false)}>
