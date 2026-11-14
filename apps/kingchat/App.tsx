@@ -32,6 +32,14 @@ registerGlobals();
 Notifications.setNotificationHandler({handleNotification:async()=>({shouldShowAlert:true,shouldPlaySound:true,shouldSetBadge:true,shouldShowBanner:true,shouldShowList:true})});
 
 const CALL_BACKGROUND_TASK = 'guftin-incoming-call-v1';
+const CALL_NOTIFICATION_CHANNEL_ID = 'guftin_call_ringtone_v1';
+const CALL_RINGTONE_SOUND = 'guftin_call_ringtone.wav';
+const incomingCallNotificationId = (callId:string) => 'guftin-incoming-call-'+callId;
+const dismissIncomingCallNotification = async (callId:string) => {
+  const identifier=incomingCallNotificationId(callId);
+  try{await Notifications.cancelScheduledNotificationAsync(identifier);}catch{}
+  try{await Notifications.dismissNotificationAsync(identifier);}catch{}
+};
 let callKeepSetupPromise:Promise<void>|null=null;
 const ensureCallKeepReady=()=>{
   if(Platform.OS!=='android')return Promise.resolve();
@@ -45,9 +53,9 @@ const ensureCallKeepReady=()=>{
           cancelButton:'Later',
           okButton:'Continue',
           additionalPermissions:[],
-          // Use Android Telecom managed mode so the operating system owns
-          // the incoming-call screen and plays the device ringtone until answered.
-          selfManaged:false,
+          // Self-managed CallKeep requires Guftin to display its own incoming-call
+          // notification. The notification channel below carries the call ringtone.
+          selfManaged:true,
           foregroundService:{
             channelId:'guftin-call-service',
             channelName:'Guftin active calls',
@@ -72,9 +80,8 @@ const presentNativeIncomingCall = async (payload:any) => {
   const callType = payload?.call_type === 'video' ? 'video' : 'voice';
   const isGroupCall = payload?.call_scope === 'group';
 
-  // Register the incoming call with Android Telecom managed mode.
-  // Android owns the system call screen and native ringtone; Guftin handles
-  // the secure LiveKit media session after the user answers.
+  // Register with Telecom. In self-managed mode CallKeep signals
+  // showIncomingCallUi and Guftin displays its own full-screen call surface.
   try {
     await ensureCallKeepReady();
     await RNCallKeep.displayIncomingCall(
@@ -85,13 +92,42 @@ const presentNativeIncomingCall = async (payload:any) => {
       callType === 'video'
     );
   } catch (error:any) {
-    console.warn('Guftin Android Telecom incoming-call registration failed:', error?.message || error);
+    console.warn('Guftin Android self-managed call registration failed:', error?.message || error);
   }
 
-  // Android Telecom managed mode supplies the full incoming-call UI and
-  // keeps the device's native ringtone active until the call is answered or ended.
-  // Do not post a second local notification here: it would compete with the
-  // system call alert and can make the call sound like a message notification.
+  // Android 8+ takes sound and vibration from this dedicated channel.
+  // The bundled sound is a ring cycle, routed through the ringtone audio usage.
+  try {
+    await configureGuftinNotificationChannels();
+    const identifier=incomingCallNotificationId(callId);
+    await dismissIncomingCallNotification(callId);
+    await Notifications.scheduleNotificationAsync({
+      identifier,
+      content: {
+        title: isGroupCall
+          ? (callType === 'video' ? 'Incoming group video call' : 'Incoming group voice call')
+          : (callType === 'video' ? 'Incoming video call' : 'Incoming voice call'),
+        body: callerName + (isGroupCall ? ' started a group call. Tap Accept to join.' : ' is calling you.'),
+        sound: CALL_RINGTONE_SOUND,
+        priority: Notifications.AndroidNotificationPriority.MAX,
+        sticky: true,
+        autoDismiss: false,
+        vibrate: [0,500,250,500,250,700],
+        categoryIdentifier: 'guftin_incoming_call',
+        data: {
+          type: 'incoming_call',
+          call_id: callId,
+          caller_id: String(payload?.caller_id || ''),
+          caller_name: callerName,
+          call_type: callType,
+          call_scope: isGroupCall ? 'group' : 'direct'
+        }
+      },
+      trigger: { channelId: CALL_NOTIFICATION_CHANNEL_ID }
+    });
+  } catch (notificationError:any) {
+    console.warn('Guftin ringtone notification failed:', notificationError?.message || notificationError);
+  }
 };
 
 TaskManager.defineTask(CALL_BACKGROUND_TASK, async ({data,error}:any) => {
@@ -202,12 +238,18 @@ const configureGuftinNotificationChannels=async()=>{
       enableVibrate:true,
       showBadge:true
     });
-    await Notifications.setNotificationChannelAsync('calls',{
+    // Use a new ID so Android does not keep the old one-shot notification
+    // sound settings from earlier Guftin builds.
+    await Notifications.setNotificationChannelAsync(CALL_NOTIFICATION_CHANNEL_ID,{
       name:'Incoming calls',
-      description:'Guftin voice and video call alerts',
+      description:'Guftin voice and video calls with a dedicated ringtone',
       importance:Notifications.AndroidImportance.MAX,
       vibrationPattern:[0,500,250,500,250,700],
-      sound:'default',
+      sound:CALL_RINGTONE_SOUND,
+      audioAttributes:{
+        usage:Notifications.AndroidAudioUsage.NOTIFICATION_RINGTONE,
+        contentType:Notifications.AndroidAudioContentType.SONIFICATION
+      },
       enableVibrate:true,
       enableLights:true,
       lightColor:'#087e6c',
@@ -1218,6 +1260,7 @@ function GuftinApp() {
     if((call.call_scope||'direct')==='group'){
       const {error}=await supabase.rpc('kc_answer_group_call',{p_call_id:call.id,p_status:status});
       if(error){Alert.alert('Group call action failed',error.message);return;}
+      void dismissIncomingCallNotification(call.id);
       syncNativeIncomingCallAction(call.id,status);
       setIncomingCall(null);
       if(status==='accepted')await joinCall({...call,status:'accepted'});
@@ -1229,6 +1272,7 @@ function GuftinApp() {
     else update.ended_at=new Date().toISOString();
     const {error}=await supabase.from('kc_call_logs').update(update).eq('id',call.id);
     if(error){Alert.alert('Call action failed',error.message);return;}
+    void dismissIncomingCallNotification(call.id);
     syncNativeIncomingCallAction(call.id,status);
     setIncomingCall(null);
     if(status==='accepted')await joinCall({...call,status:'accepted'});
@@ -1339,7 +1383,10 @@ function GuftinApp() {
           void joinCall(call);
         }
         if(['declined','ended','missed','cancelled'].includes(call.status)){
-          if(Platform.OS==='android')RNCallKeep.endCall(call.id);
+          if(Platform.OS==='android'){
+            void dismissIncomingCallNotification(call.id);
+            RNCallKeep.endCall(call.id);
+          }
           setIncomingCall((old:any)=>old?.id===call.id?null:old);
           setOutgoingCall((old:any)=>old?.id===call.id?null:old);
           setPendingCallAccept((old:any)=>old?.id===call.id?null:old);
@@ -2221,10 +2268,29 @@ function GuftinApp() {
     const endSub=RNCallKeep.addEventListener('endCall',({callUUID}:any)=>{
       void nativeCallActionHandlerRef.current?.(callUUID,'end');
     });
+    const showUiSub=RNCallKeep.addEventListener('showIncomingCallUi',({callUUID}:any)=>{
+      if(!session?.user?.id||!callUUID)return;
+      try{RNCallKeep.backToForeground();}catch(foregroundError:any){
+        console.warn('Could not foreground Guftin for incoming call:',foregroundError?.message||foregroundError);
+      }
+      void supabase.from('kc_call_logs')
+        .select('id,conversation_id,caller_id,callee_id,call_type,status,call_scope')
+        .eq('id',callUUID).maybeSingle().then(async({data:call,error})=>{
+          if(error||!call||call.status!=='ringing')return;
+          if((call.call_scope||'direct')==='group'){
+            const {data:participant,error:participantError}=await supabase.from('kc_call_participants')
+              .select('status,role').eq('call_id',call.id).eq('user_id',session.user.id).maybeSingle();
+            if(participantError||!participant||!['invited','ringing'].includes(participant.status))return;
+          }else if(call.callee_id!==session.user.id)return;
+          setTab('Calls');
+          setIncomingCall(call);
+        });
+    });
 
     return ()=>{
       answerSub.remove();
       endSub.remove();
+      showUiSub.remove();
     };
   },[session?.user?.id]);
 
