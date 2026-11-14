@@ -645,6 +645,8 @@ function VideoBubble({uri}:{uri:string}) {
 function GuftinApp() {
   const insets=useSafeAreaInsets();
   const [tab,setTab]=useState('Chats');
+  const activeTabRef=useRef(tab);
+  activeTabRef.current=tab;
   const [session,setSession]=useState<any>(null);
   const [authRestoring,setAuthRestoring]=useState(true);
   const [profile,setProfile]=useState<any>(null);
@@ -655,6 +657,7 @@ function GuftinApp() {
   const [messages,setMessages]=useState<Record<string,Message[]>>({});
   const [peerLastReadAt,setPeerLastReadAt]=useState<string|null>(null);
   const activeConversationIdRef=useRef<string|null>(null);
+  const chatMessagesListRef=useRef<FlatList<Message>|null>(null);
   const loadMessagesRef=useRef<((id:string)=>Promise<void>)|null>(null);
   const flushPendingMessagesRef=useRef<(()=>Promise<void>)|null>(null);
   const flushPendingMediaRef=useRef<(()=>Promise<void>)|null>(null);
@@ -711,6 +714,7 @@ function GuftinApp() {
   const [themeName,setThemeName]=useState('emerald');
   const [deliveredByMessage,setDeliveredByMessage]=useState<Record<string,string>>({});
   const hiddenMessageIds=useRef(new Set<string>());
+  const clearingConversationIds=useRef(new Set<string>());
   const handledNotificationResponses=useRef(new Set<string>());
   const joiningCallIds=useRef(new Set<string>());
   const endingCallIds=useRef(new Set<string>());
@@ -999,8 +1003,8 @@ function GuftinApp() {
           else if(last.message_type==='audio')preview='Voice message';
           else if(last.message_type==='file')preview='Document';
           else if(typeof last.body==='string'&&last.body.startsWith(E2EE_PREFIX)){
-            try{preview=deviceIdentity?decryptMessageForDevice(last.body,deviceIdentity):'🔒 Encrypted message';}
-            catch{preview='🔒 Encrypted message';}
+            try{preview=deviceIdentity?decryptMessageForDevice(last.body,deviceIdentity):'Message';}
+            catch{preview='Message';}
           }else preview=last.body||'Attachment';
         }
         return {id:row.conversation_id,name,avatar:initials(name),avatarUrl,color:colorFor(name),last:preview,
@@ -1053,12 +1057,21 @@ function GuftinApp() {
     }));
   },[session]);
 
-  const resolveMessage=useCallback(async(raw:any):Promise<Message>=>{
+  useEffect(()=>{
+    if(session&&tab==='Calls')void loadCallHistory();
+  },[session?.user?.id,tab,loadCallHistory]);
+
+  const resolveMessage=useCallback(async(raw:any,cached?:Message):Promise<Message>=>{
     let attachment_url=raw.attachment_url||null;
     if(attachment_url){
       attachment_url=await getSignedMediaUrl(attachment_url);
     }
     let body=raw.body||null;
+    const cachedPlaintextIsValid=!!cached&&cached.id===raw.id&&cached.created_at===raw.created_at&&
+      cached.message_type===raw.message_type&&!cached.pending&&!raw.deleted_at&&
+      typeof cached.body==='string'&&cached.body.length>0&&
+      !cached.body.startsWith(E2EE_PREFIX)&&!cached.body.startsWith(E2EE_MEDIA_PREFIX)&&
+      !cached.body.startsWith('🔒');
     if(typeof body==='string'&&body.startsWith(E2EE_MEDIA_PREFIX)){
       try{
         if(!attachment_url||!deviceIdentity)throw new Error('The local encryption key is not available.');
@@ -1081,7 +1094,7 @@ function GuftinApp() {
       try{
         body=deviceIdentity?decryptMessageForDevice(body,deviceIdentity):'🔒 Encrypted message — this device key is not ready.';
       }catch(e:any){
-        body='🔒 Encrypted message — '+(e?.message||'unable to decrypt on this device.');
+        body=cachedPlaintextIsValid?cached!.body:'This message is unavailable on this device.';
       }
     }
     return {...raw,body,attachment_url,mine:raw.sender_id===session?.user?.id,deleted_at:raw.deleted_at||null};
@@ -1282,6 +1295,80 @@ function GuftinApp() {
     if(active?.id===chat.id)setActive(null);
   };
 
+  const clearChatForMe=async(chat:Chat)=>{
+    if(!session)return;
+    const conversationId=chat.id;
+    if(clearingConversationIds.current.has(conversationId))return;
+    clearingConversationIds.current.add(conversationId);
+    try{
+      let attempts=0;
+      while((flushingPendingMessages.current||flushingPendingMedia.current)&&attempts<200){
+        await new Promise<void>(resolve=>setTimeout(resolve,50));
+        attempts++;
+      }
+      if(flushingPendingMessages.current||flushingPendingMedia.current){
+        throw new Error('A message is still syncing. Close this chat and try Clear Chat again.');
+      }
+      const messageIds:string[]=[];
+      for(let from=0;;from+=500){
+        const {data,error}=await supabase.from('kc_messages').select('id')
+          .eq('conversation_id',conversationId)
+          .order('created_at',{ascending:true}).order('id',{ascending:true})
+          .range(from,from+499);
+        if(error)throw error;
+        const batch=data||[];
+        messageIds.push(...batch.map((row:any)=>row.id));
+        if(batch.length<500)break;
+      }
+      for(let offset=0;offset<messageIds.length;offset+=250){
+        const rows=messageIds.slice(offset,offset+250).map(message_id=>({message_id,user_id:session.user.id}));
+        const {error}=await supabase.from('kc_message_hidden')
+          .upsert(rows,{onConflict:'message_id,user_id',ignoreDuplicates:true});
+        if(error)throw error;
+      }
+      messageIds.forEach(id=>hiddenMessageIds.current.add(id));
+      const removeLocalFile=(uri:any)=>{
+        if(typeof uri!=='string'||!uri.startsWith('file://'))return;
+        try{const file=new File(uri);if(file.exists)file.delete();}catch{}
+      };
+      const cacheKey='guftin-cache-messages:'+session.user.id+':'+conversationId;
+      try{
+        const cachedRaw=await AsyncStorage.getItem(cacheKey);
+        const cachedItems=cachedRaw?JSON.parse(cachedRaw):[];
+        if(Array.isArray(cachedItems))cachedItems.forEach((item:any)=>removeLocalFile(item.attachment_url));
+      }catch{}
+      const textQueueKey='guftin-pending-messages:'+session.user.id;
+      const mediaQueueKey='guftin-pending-media:'+session.user.id;
+      const textQueueRaw=await AsyncStorage.getItem(textQueueKey);
+      if(textQueueRaw){
+        const textQueue=JSON.parse(textQueueRaw);
+        if(!Array.isArray(textQueue))throw new Error('The pending message queue could not be read.');
+        await AsyncStorage.setItem(textQueueKey,JSON.stringify(textQueue.filter((item:any)=>item.conversation_id!==conversationId)));
+      }
+      const mediaQueueRaw=await AsyncStorage.getItem(mediaQueueKey);
+      if(mediaQueueRaw){
+        const mediaQueue=JSON.parse(mediaQueueRaw);
+        if(!Array.isArray(mediaQueue))throw new Error('The pending media queue could not be read.');
+        mediaQueue.filter((item:any)=>item.conversation_id===conversationId).forEach((item:any)=>{
+          removeLocalFile(item.localFileUri);
+          removeLocalFile(item.outboundFileUri);
+        });
+        await AsyncStorage.setItem(mediaQueueKey,JSON.stringify(mediaQueue.filter((item:any)=>item.conversation_id!==conversationId)));
+      }
+      await AsyncStorage.removeItem(cacheKey);
+      setMessages(prev=>({...prev,[conversationId]:[]}));
+      setChats(prev=>prev.map(item=>item.id===conversationId?{...item,last:'No messages yet',time:'',unread:0,lastAt:0}:item));
+      setPeerLastReadAt(null);
+      if(activeConversationIdRef.current===conversationId)setDraft('');
+      void loadInbox();
+      Alert.alert('Chat cleared','Messages are cleared on this phone. The other person still has their chat history.');
+    }catch(error:any){
+      Alert.alert('Could not clear chat',error?.message||'Please try again.');
+    }finally{
+      clearingConversationIds.current.delete(conversationId);
+    }
+  };
+
   const deleteMessage=async(item:Message)=>{
     if(!session)return;
     const hideForMe=async()=>{
@@ -1463,6 +1550,7 @@ function GuftinApp() {
       .on('postgres_changes',{event:'*',schema:'public',table:'kc_call_logs'},payload=>{
         const call=(payload.new||payload.old) as any;
         if(!call?.id)return;
+        if(activeTabRef.current==='Calls')void loadCallHistory();
         const groupCall=(call.call_scope||'direct')==='group';
         const incoming=groupCall
           ?call.caller_id!==session.user.id&&call.status==='ringing'
@@ -1528,7 +1616,7 @@ function GuftinApp() {
       setIncomingCall(null);setOutgoingCall(null);setLiveCall(null);
       void supabase.from('kc_profiles').update({is_online:false,last_seen_at:new Date().toISOString()}).eq('id',session.user.id);
     };
-  },[session,loadProfile,loadInbox,resolveMessage,joinCall,respondToCall,acceptCallWhenReady,onlineVisibility,autoSync,syncIntervalSeconds,showReadReceipts,mediaAutoDownload]);
+  },[session,loadProfile,loadInbox,loadCallHistory,resolveMessage,joinCall,respondToCall,acceptCallWhenReady,onlineVisibility,autoSync,syncIntervalSeconds,showReadReceipts,mediaAutoDownload]);
 
   useEffect(()=>{
     let mounted=true;
@@ -1704,7 +1792,7 @@ function GuftinApp() {
           if(cachedItem.attachment_url.startsWith('file://')&&localFile.exists)return cachedItem;
         }catch{ /* Resolve from Supabase if the local media cache has expired. */ }
       }
-      return resolveMessage(m);
+      return resolveMessage(m,cachedItem);
     }));
     const combined=[...resolved,...offlinePendingItems.filter(pending=>!resolved.some(item=>item.id===pending.id))]
       .sort((a,b)=>new Date(a.created_at).getTime()-new Date(b.created_at).getTime());
@@ -1762,6 +1850,7 @@ function GuftinApp() {
 
   const queueOfflineTextMessage=async(conversationId:string,text:string)=>{
     if(!session)return;
+    if(clearingConversationIds.current.has(conversationId))throw new Error('This chat is being cleared. Please try again in a moment.');
     const id=ExpoCrypto.randomUUID();
     const localId='pending:'+id;
     const queueKey='guftin-pending-messages:'+session.user.id;
@@ -1785,7 +1874,7 @@ function GuftinApp() {
 
   const sendMessage=async()=>{
     const body=draft.trim();
-    if(!body||!active||!session||sending)return;
+    if(!body||!active||!session||sending||clearingConversationIds.current.has(active.id))return;
     // Text can be stored locally before the encryption roster is online.
     // The background sender waits for the device key and network before delivery.
     const conversationId=active.id;
@@ -1813,6 +1902,7 @@ function GuftinApp() {
       const remaining:any[]=[];
       for(let index=0;index<queue.length;index++){
         const pending=queue[index];
+        if(clearingConversationIds.current.has(pending.conversation_id))continue;
         try{
           const {data:members,error:membersError}=await supabase.from('kc_conversation_members')
             .select('user_id').eq('conversation_id',pending.conversation_id);
@@ -1825,6 +1915,7 @@ function GuftinApp() {
           const registeredUsers=new Set((devices||[]).map((device:any)=>device.user_id));
           if(memberIds.some(id=>!registeredUsers.has(id)))throw new Error('A conversation member has not registered a secure device yet.');
           const encryptedBody=encryptMessageForDevices(pending.text,devices||[],deviceIdentity);
+          if(clearingConversationIds.current.has(pending.conversation_id))continue;
           const inserted=await supabase.from('kc_messages').insert({
             id:pending.id,conversation_id:pending.conversation_id,sender_id:session.user.id,
             body:encryptedBody,message_type:'text'
@@ -1870,6 +1961,7 @@ function GuftinApp() {
 
   const queueOfflineMedia=async(conversationId:string,asset:any,messageType:'image'|'video'|'file',contentType:string,id:string,localId:string)=>{
     if(!session||!deviceIdentity)throw new Error('Secure chat is not ready.');
+    if(clearingConversationIds.current.has(conversationId))throw new Error('This chat is being cleared. Please try again in a moment.');
     const sourceFile=new File(asset.uri);
     const plainBytes=new Uint8Array(await sourceFile.arrayBuffer());
     const selfDevice={id:deviceIdentity.deviceId,user_id:session.user.id,public_key:deviceIdentity.publicKeyHex};
@@ -1888,6 +1980,7 @@ function GuftinApp() {
       fileName:asset.fileName||('attachment.'+(messageType==='video'?'mp4':messageType==='image'?'jpg':'bin')),
       localBody:localEncrypted.body,localFileUri:localPath.uri,created_at:new Date().toISOString()
     };
+    if(clearingConversationIds.current.has(conversationId))throw new Error('This chat is being cleared. Please try again in a moment.');
     const queueKey='guftin-pending-media:'+session.user.id;
     let queue:any[]=[];
     try{const raw=await AsyncStorage.getItem(queueKey);queue=raw?JSON.parse(raw):[];if(!Array.isArray(queue))queue=[];}catch{queue=[];}
@@ -1908,6 +2001,7 @@ function GuftinApp() {
       const remaining:any[]=[];
       for(let index=0;index<queue.length;index++){
         const pending=queue[index];
+        if(clearingConversationIds.current.has(pending.conversation_id))continue;
         let plainBytes:Uint8Array|undefined;
         let outboundCipher:Uint8Array|undefined;
         try{
@@ -1955,6 +2049,7 @@ function GuftinApp() {
           if(existing.error)throw existing.error;
           let saved=existing.data;
           if(!saved){
+            if(clearingConversationIds.current.has(pending.conversation_id))continue;
             const {data:signed}=await supabase.storage.from('chat-media').createSignedUrl(objectPath,60);
             if(!signed?.signedUrl){
               const {error:uploadError}=await supabase.storage.from('chat-media').upload(objectPath,outboundCipher,{
@@ -2959,7 +3054,8 @@ function GuftinApp() {
 
   if(active){
     const list=messages[active.id]||[];
-    return <SafeAreaView style={{flex:1,backgroundColor:C.paper}}>
+    return <KeyboardAvoidingView style={{flex:1}} behavior={Platform.OS==='ios'?'padding':'height'} keyboardVerticalOffset={Platform.OS==='ios'?insets.top:0}>
+      <SafeAreaView style={{flex:1,backgroundColor:C.paper}}>
       <StatusBar barStyle="dark-content"/>
       <View style={{minHeight:82,backgroundColor:C.white,flexDirection:'row',alignItems:'center',paddingHorizontal:12,paddingVertical:7,borderBottomWidth:1,borderColor:C.line,elevation:2}}>
         <Btn onPress={()=>setActive(null)} style={{padding:10}}><Text style={{fontSize:24,color:C.ink}}>‹</Text></Btn>
@@ -2972,8 +3068,16 @@ function GuftinApp() {
           <Btn disabled={callBusy} onPress={()=>void startCall('voice')} style={{backgroundColor:C.mint,borderRadius:15,width:56,height:58,alignItems:'center',justifyContent:'center',opacity:callBusy?0.5:1,borderWidth:1,borderColor:'#cce9dc'}}><Text style={{fontSize:20,color:C.green}}>☎</Text><Text style={{fontSize:10,fontWeight:'900',color:C.green}}>{active.kind==='group'?'Group call':'Call'}</Text></Btn>
           <Btn disabled={callBusy} onPress={()=>void startCall('video')} style={{backgroundColor:C.mint,borderRadius:15,width:56,height:58,alignItems:'center',justifyContent:'center',opacity:callBusy?0.5:1,borderWidth:1,borderColor:'#cce9dc'}}><Text style={{fontSize:19,color:C.green}}>▣</Text><Text style={{fontSize:10,fontWeight:'900',color:C.green}}>Video</Text></Btn>
         </>}
+        <Btn onPress={()=>Alert.alert('Chat options',active.name,[
+          {text:'Chat info',onPress:()=>void openChatDetails()},
+          {text:'Clear Chat',style:'destructive',onPress:()=>Alert.alert('Clear this chat?', 'This removes the messages from your Guftin account on this phone. The other participant keeps their chat history.',[
+            {text:'Cancel',style:'cancel'},
+            {text:'Clear Chat',style:'destructive',onPress:()=>void clearChatForMe(active)}
+          ])},
+          {text:'Cancel',style:'cancel'}
+        ])} style={{width:36,height:52,borderRadius:13,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:26,fontWeight:'900',color:C.ink}}>⋮</Text></Btn>
       </View>
-      <FlatList data={list} keyExtractor={m=>m.id} contentContainerStyle={{padding:18,gap:12,flexGrow:1,justifyContent:list.length?'flex-end':'center'}}
+      <FlatList ref={chatMessagesListRef} data={list} keyExtractor={m=>m.id} keyboardShouldPersistTaps="handled" style={{flex:1}} contentContainerStyle={{padding:18,gap:12,flexGrow:1,justifyContent:list.length?'flex-end':'center'}}
         ListEmptyComponent={<Text style={{textAlign:'center',color:C.muted}}>No messages yet. Send the first message.</Text>}
         renderItem={({item})=><TouchableOpacity activeOpacity={1} onLongPress={()=>deleteMessage(item)} delayLongPress={420} style={{alignSelf:item.mine?'flex-end':'flex-start',maxWidth:'84%',backgroundColor:item.mine?'#dff4e8':C.white,padding:13,borderRadius:17,borderTopRightRadius:item.mine?5:17,borderTopLeftRadius:item.mine?17:5}}>
           {item.deleted_at?<Text style={{fontSize:12,color:C.muted,fontStyle:'italic'}}>This message was deleted</Text>:item.message_type==='image'&&item.attachment_url?<Image source={{uri:item.attachment_url}} style={{width:210,height:210,borderRadius:12}} resizeMode="cover"/>:item.message_type==='video'&&item.attachment_url?<VideoBubble uri={item.attachment_url}/>:item.message_type==='audio'&&item.attachment_url?<AudioBubble uri={item.attachment_url}/>:item.message_type==='file'&&item.attachment_url?<View style={{minWidth:225,maxWidth:270,backgroundColor:C.paper,borderRadius:13,padding:12}}>
@@ -2989,16 +3093,14 @@ function GuftinApp() {
             {timeLabel(item.created_at)}{item.pending?' · Queued':item.mine ? " · " + (showReadReceipts && peerLastReadAt && new Date(peerLastReadAt).getTime() >= new Date(item.created_at).getTime() ? "✓✓ Read" : deliveredByMessage[item.id] ? "✓✓ Delivered" : "✓ Sent") : ""}
           </Text>
         </TouchableOpacity>}/>
-      <KeyboardAvoidingView behavior={Platform.OS==='ios'?'padding':undefined}>
-        <View style={{flexDirection:'row',alignItems:'center',padding:11,gap:8,backgroundColor:C.white}}>
+      <View style={{flexDirection:'row',alignItems:'center',padding:11,gap:8,backgroundColor:C.white,borderTopWidth:1,borderColor:C.line}}>
           <Btn disabled={mediaPreparing} onPress={sendMedia} style={{width:42,height:42,borderRadius:15,backgroundColor:C.paper,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:23,color:C.green}}>＋</Text></Btn>
           <Btn disabled={sending||recordingBusy} onPress={recording?stopVoiceRecording:startVoiceRecording} style={{width:42,height:42,borderRadius:15,backgroundColor:recording?'#fde8e8':C.paper,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:18,color:recording?C.red:C.green}}>{recording?'■':'🎙'}</Text></Btn>
-          <TextInput value={draft} onChangeText={setDraft} placeholder={recording?'Recording… tap ■ to send':'Write a message...'} multiline maxLength={4000} style={{flex:1,maxHeight:110,backgroundColor:C.paper,borderRadius:16,paddingHorizontal:15,paddingVertical:12,color:C.ink}}/>
+          <TextInput value={draft} onChangeText={setDraft} onFocus={()=>requestAnimationFrame(()=>chatMessagesListRef.current?.scrollToEnd({animated:true}))} placeholder={recording?'Recording… tap ■ to send':'Write a message...'} multiline maxLength={4000} style={{flex:1,minHeight:46,maxHeight:110,backgroundColor:C.paper,borderRadius:16,paddingHorizontal:15,paddingVertical:12,color:C.ink,textAlignVertical:'center'}}/>
           <Btn disabled={!draft.trim()||sending} onPress={sendMessage} style={{backgroundColor:C.green,width:46,height:46,borderRadius:16,alignItems:'center',justifyContent:'center'}}>
             {sending?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontSize:20}}>➤</Text>}
           </Btn>
-        </View>
-      </KeyboardAvoidingView>
+      </View>
     <Modal visible={chatDetailsOpen} animationType="slide" onRequestClose={()=>setChatDetailsOpen(false)}>
       <SafeAreaView style={{flex:1,backgroundColor:C.paper}}>
         <StatusBar barStyle="dark-content"/>
@@ -3054,7 +3156,8 @@ function GuftinApp() {
       </SafeAreaView>
     </Modal>
 
-    </SafeAreaView>;
+      </SafeAreaView>
+    </KeyboardAvoidingView>;
   }
 
   return <SafeAreaView edges={['top','left','right']} style={{flex:1,backgroundColor:C.white}}>
