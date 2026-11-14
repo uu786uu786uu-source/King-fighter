@@ -41,6 +41,7 @@ const CALL_RINGTONE_SOUND = 'guftin_call_ringtone.wav';
 let guftinCallAudioStartPromise: Promise<void> | null = null;
 let guftinCallAudioStopPromise: Promise<void> | null = null;
 let guftinCallAudioSessionActive = false;
+let activeGuftinCallRoom: { callId: string; disconnect: () => Promise<void>; disconnected: boolean } | null = null;
 
 const startGuftinCallAudioSession = async (): Promise<void> => {
   if (guftinCallAudioStopPromise) await guftinCallAudioStopPromise;
@@ -371,7 +372,7 @@ function CallControlButton({label,onPress,active=false,danger=false,disabled=fal
   </Btn>;
 }
 
-function CallRoomScreen({callType,onHangUp,callScope}:any) {
+function CallRoomScreen({callId,callType,onHangUp,callScope}:any) {
   const tracks=useTracks([Track.Source.Camera]);
   const participants=useParticipants();
   const {localParticipant,isMicrophoneEnabled,isCameraEnabled}=useLocalParticipant();
@@ -379,6 +380,14 @@ function CallRoomScreen({callType,onHangUp,callScope}:any) {
   const [controlBusy,setControlBusy]=useState(false);
   const room=useRoomContext();
   const hangUpInProgress=useRef(false);
+
+  useEffect(()=>{
+    const controller={callId,disconnect:()=>room.disconnect(),disconnected:false};
+    activeGuftinCallRoom=controller;
+    return ()=>{
+      if(activeGuftinCallRoom===controller)activeGuftinCallRoom=null;
+    };
+  },[callId,room]);
 
   const handleHangUp=async()=>{
     if(hangUpInProgress.current)return;
@@ -606,12 +615,13 @@ function SecureLiveKitRoom({liveCall,onDisconnected,onHangUp,onConnected}:any) {
     options={{e2ee:{e2eeManager}}}
     onConnected={onConnected}
     onDisconnected={async()=>{
+      if(activeGuftinCallRoom?.callId===liveCall.id)activeGuftinCallRoom.disconnected=true;
       await stopGuftinCallAudioSession();
       await onDisconnected?.();
     }}
     onEncryptionError={(error:any)=>Alert.alert('Call encryption error',error?.message||'Media encryption could not be started.')}
   >
-    <CallRoomScreen callType={liveCall.callType} callScope={liveCall.callScope} onHangUp={onHangUp}/>
+    <CallRoomScreen callId={liveCall.id} callType={liveCall.callType} callScope={liveCall.callScope} onHangUp={onHangUp}/>
   </LiveKitRoom>;
 }
 function AudioBubble({uri}:{uri:string}) {
@@ -2302,6 +2312,18 @@ function GuftinApp() {
 
     const endingGroup=(liveCall?.id===callId&&liveCall?.callScope==='group')||(outgoingCall?.id===callId&&outgoingCall?.call_scope==='group');
     const hasNativeIncomingCall=(liveCall?.id===callId&&liveCall?.nativeIncomingCall)||(incomingCall?.id===callId);
+
+    // Telecom can ask us to end an active call without going through the
+    // in-call button. Disconnect LiveKit before changing state or releasing
+    // Android's communication audio focus.
+    if(liveCall?.id===callId){
+      const roomController=activeGuftinCallRoom;
+      if(roomController?.callId===callId&&!roomController.disconnected){
+        try{await roomController.disconnect();}
+        catch(error:any){console.warn('Guftin forced call disconnect:',error?.message||error);}
+      }
+      await stopGuftinCallAudioSession();
+    }
 
     // Clear the local call UI immediately; network updates must not hold audio
     // resources or leave a stale call screen on the device.
