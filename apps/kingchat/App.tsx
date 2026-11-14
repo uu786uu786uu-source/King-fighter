@@ -3231,7 +3231,7 @@ function GuftinApp() {
     if(!signupPendingEmail){setAuthError('Start account creation again to request a new code.');return;}
     if(!/^\d{6,8}$/.test(token)){setAuthError('Enter the 6-8 digit code from your email.');return;}
     setAuthBusy(true);setAuthError('');
-    const {data,error}=await supabase.auth.verifyOtp({email:signupPendingEmail,token,type:'signup'});
+    const {data,error}=await supabase.auth.verifyOtp({email:signupPendingEmail,token,type:'email'});
     setAuthBusy(false);
     if(error){setAuthError(error.message);return;}
     if(!data.session){setAuthError('Email was verified but no login session was returned. Try signing in.');return;}
