@@ -128,7 +128,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Guftin-1.4.29-GitHub-APK
-          path: apps/kingchat/dist/Guftin-1.4.27-GitHub.apk
+          path: apps/kingchat/dist/Guftin-1.4.29-GitHub.apk
           if-no-files-found: error
           retention-days: 30
 
