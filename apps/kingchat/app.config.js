@@ -5,6 +5,22 @@ const { spawnSync } = require("node:child_process");
 const assetsDirectory = path.join(__dirname, "assets");
 const svgIcon = path.join(assetsDirectory, "guftin-icon.svg");
 const pngIcon = path.join(assetsDirectory, "guftin-icon.png");
+const callRingtoneScript = path.join(__dirname, "scripts", "prepare-call-ringtone.js");
+const callRingtoneAsset = path.join(assetsDirectory, "guftin_call_ringtone.wav");
+
+// Build a short, original ring-cycle WAV into Android/iOS notification resources.
+// The source generator is committed; the binary is recreated during EAS config.
+const ringtoneNeedsBuild = !fs.existsSync(callRingtoneAsset) ||
+  fs.statSync(callRingtoneScript).mtimeMs > fs.statSync(callRingtoneAsset).mtimeMs;
+if (ringtoneNeedsBuild) {
+  const generatedRingtone = spawnSync(process.execPath, [callRingtoneScript], {
+    cwd: __dirname,
+    stdio: ["ignore", "ignore", "inherit"]
+  });
+  if (generatedRingtone.status !== 0 || !fs.existsSync(callRingtoneAsset)) {
+    throw new Error("Guftin incoming-call ringtone generation failed.");
+  }
+}
 
 // Expo resolves app.config.js synchronously. Create the PNG before returning the
 // config so EAS, Android prebuild and iOS prebuild all see a real image asset.
@@ -106,6 +122,7 @@ module.exports = ({ config }) => ({
       {
         color: "#087e6c",
         defaultChannel: "messages",
+        sounds: ["./assets/guftin_call_ringtone.wav"],
         enableBackgroundRemoteNotifications: true
       }
     ],
