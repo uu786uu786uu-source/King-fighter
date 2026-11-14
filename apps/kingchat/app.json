@@ -2,14 +2,14 @@
   "expo": {
     "name": "Guftin",
     "slug": "guftin-",
-    "version": "1.5.4",
+    "version": "1.5.5",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "scheme": "kingchat",
     "android": {
       "package": "com.guftin.app",
       "newArchEnabled": true,
-      "versionCode": 40,
+      "versionCode": 41,
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "./assets/guftin-icon.png",
@@ -45,6 +45,7 @@
       ],
       "@config-plugins/react-native-webrtc"
     ],
-    "icon": "./assets/guftin-icon.png"
+    "icon": "./assets/guftin-icon.png",
+    "description": "Guftin is a messaging and channel app. For complaints, feedback, feature requests or support, contact Guftin Official at guftinofficle@gmail.com."
   }
 }
