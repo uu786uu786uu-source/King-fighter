@@ -2780,7 +2780,7 @@ function GuftinApp() {
       Alert.alert('Secure calling not ready','Open Guftin on both phones and wait until secure chat is ready before starting a call.');
       return;
     }
-    if(!['direct','group'].includes(callChat.kind)){
+    if(!['direct','group'].includes(active.kind)){
       Alert.alert('Calling unavailable','Calls are available in direct chats and groups.');
       return;
     }
