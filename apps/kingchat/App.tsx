@@ -45,7 +45,9 @@ const ensureCallKeepReady=()=>{
           cancelButton:'Later',
           okButton:'Continue',
           additionalPermissions:[],
-          selfManaged:true,
+          // Use Android Telecom managed mode so the operating system owns
+          // the incoming-call screen and plays the device ringtone until answered.
+          selfManaged:false,
           foregroundService:{
             channelId:'guftin-call-service',
             channelName:'Guftin active calls',
@@ -85,34 +87,10 @@ const presentNativeIncomingCall = async (payload:any) => {
     console.warn('Guftin self-managed call registration failed:', error?.message || error);
   }
 
-  // If Guftin is not visible, post its own branded alert. Tapping it or the
-  // Accept/Decline actions returns to Guftin's custom call screen.
-  if (AppState.currentState !== 'active') {
-    try {
-      await Notifications.scheduleNotificationAsync({
-        content: {
-          title: isGroupCall
-            ? (callType === 'video' ? 'Incoming group video call' : 'Incoming group voice call')
-            : (callType === 'video' ? 'Incoming video call' : 'Incoming voice call'),
-          body: callerName + (isGroupCall ? ' started a group call. Tap to join.' : ' is calling you.'),
-          sound: 'default',
-          categoryIdentifier: 'guftin_incoming_call',
-          sticky: true,
-          data: {
-            type: 'incoming_call',
-            call_id: callId,
-            caller_id: String(payload?.caller_id || ''),
-            caller_name: callerName,
-            call_type: callType,
-            call_scope: isGroupCall ? 'group' : 'direct'
-          }
-        },
-        trigger: null
-      });
-    } catch (notificationError:any) {
-      console.warn('Guftin incoming-call alert failed:', notificationError?.message || notificationError);
-    }
-  }
+  // Android Telecom managed mode supplies the full incoming-call UI and
+  // keeps the device's native ringtone active until the call is answered or ended.
+  // Do not post a second local notification here: it would compete with the
+  // system call alert and can make the call sound like a message notification.
 };
 
 TaskManager.defineTask(CALL_BACKGROUND_TASK, async ({data,error}:any) => {
@@ -1230,7 +1208,7 @@ function GuftinApp() {
       if(status==='accepted')RNCallKeep.answerIncomingCall(callId);
       else RNCallKeep.rejectCall(callId);
     }catch(error:any){
-      console.warn('Android self-managed call action sync:',error?.message||error);
+      console.warn('Android Telecom call action sync:',error?.message||error);
     }
   };
 
@@ -2165,7 +2143,7 @@ function GuftinApp() {
     }
     const hasNativeIncomingCall=(liveCall?.id===callId&&liveCall?.nativeIncomingCall)||(incomingCall?.id===callId);
     if(hasNativeIncomingCall&&Platform.OS==='android'){
-      try{RNCallKeep.endCall(callId);}catch(error:any){console.warn('Could not end self-managed Telecom call:',error?.message||error);}
+      try{RNCallKeep.endCall(callId);}catch(error:any){console.warn('Could not end Android Telecom call:',error?.message||error);}
     }
     setLiveCall(null);
     setOutgoingCall(null);
@@ -2242,31 +2220,10 @@ function GuftinApp() {
     const endSub=RNCallKeep.addEventListener('endCall',({callUUID}:any)=>{
       void nativeCallActionHandlerRef.current?.(callUUID,'end');
     });
-    // Self-managed Android calls explicitly ask the app to present its own UI.
-    const showUiSub=RNCallKeep.addEventListener('showIncomingCallUi',({callUUID}:any)=>{
-      if(!session?.user?.id||!callUUID)return;
-      // Self-managed Telecom deliberately has no Phone-app UI. Bring Guftin
-      // forward so its own full-screen incoming-call surface is what the user sees.
-      try{RNCallKeep.backToForeground();}catch(foregroundError:any){
-        console.warn('Could not foreground Guftin for incoming call:',foregroundError?.message||foregroundError);
-      }
-      void supabase.from('kc_call_logs')
-        .select('id,conversation_id,caller_id,callee_id,call_type,status,call_scope')
-        .eq('id',callUUID).maybeSingle().then(async({data:call,error})=>{
-          if(error||!call||call.status!=='ringing')return;
-          if((call.call_scope||'direct')==='group'){
-            const {data:participant,error:participantError}=await supabase.from('kc_call_participants')
-              .select('status,role').eq('call_id',call.id).eq('user_id',session.user.id).maybeSingle();
-            if(participantError||!participant||!['invited','ringing'].includes(participant.status))return;
-          }else if(call.callee_id!==session.user.id)return;
-          setTab('Calls');
-          setIncomingCall(call);
-        });
-    });
+
     return ()=>{
       answerSub.remove();
       endSub.remove();
-      showUiSub.remove();
     };
   },[session?.user?.id]);
 
