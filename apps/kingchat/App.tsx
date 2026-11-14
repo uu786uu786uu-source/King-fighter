@@ -252,7 +252,7 @@ const THEMES:any = {
   sunset:{ink:'#472b2b',muted:'#987c73',green:'#d45b42',mint:'#ffede4',paper:'#fff7f2',white:'#fff',line:'#f3e4dc',red:'#b63f4b'},
   night:{ink:'#edf3ff',muted:'#9baac0',green:'#77b9ff',mint:'#223d5d',paper:'#101a2b',white:'#1a2940',line:'#2a3b54',red:'#ff8894'}
 };
-type Chat = { id:string; name:string; avatar:string; avatarUrl?:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number; isOfficial?:boolean; isVerified?:boolean; isChannelOwner?:boolean; inviteCode?:string; isPublic?:boolean; ownerId?:string; description?:string };
+type Chat = { id:string; name:string; avatar:string; avatarUrl?:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number; isOfficial?:boolean; isVerified?:boolean; isChannelOwner?:boolean; inviteCode?:string; isPublic?:boolean; ownerId?:string; description?:string; hasConversationActivity?:boolean; hasCallActivity?:boolean };
 type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; attachment_url?:string|null; created_at:string; mine:boolean; deleted_at?:string|null; pending?:boolean };
 const sortInboxChats=(items:Chat[])=>items.slice().sort((a,b)=>(Number(!!b.isOfficial)-Number(!!a.isOfficial))||((Number(b.lastAt)||0)-(Number(a.lastAt)||0)));
 const AUTH_REDIRECT_URL = 'kingchat://auth/callback';
@@ -1127,7 +1127,7 @@ function GuftinApp() {
     const inboxCacheKey='guftin-cache-inbox:'+session.user.id;
     try{
       const cached=await AsyncStorage.getItem(inboxCacheKey);
-      if(cached){const parsed=JSON.parse(cached);if(Array.isArray(parsed)){setChats(sortInboxChats(parsed as Chat[]));setLoading(false);}}
+      if(cached){const parsed=JSON.parse(cached);if(Array.isArray(parsed)){const safeCached=(parsed as Chat[]).filter(chat=>chat.kind!=='direct'||chat.hasConversationActivity===true||chat.hasCallActivity===true||(typeof chat.last==='string'&&chat.last!=='No messages yet'));setChats(sortInboxChats(safeCached));setLoading(false);}}
     }catch{ /* Ignore a damaged local inbox cache and try the server. */ }
     try{
       const {data:memberships,error}=await supabase.from('kc_conversation_members')
@@ -1137,19 +1137,24 @@ function GuftinApp() {
       const rows=(memberships||[]) as any[];
       const ids=rows.map(r=>r.conversation_id).filter(Boolean);
       if(ids.length===0){setChats([]);void AsyncStorage.setItem(inboxCacheKey,'[]').catch(()=>{});return;}
-      const [memberResult,profileResult,messageResult,hiddenResult,channelResult]=await Promise.all([
+      const directConversationIds=rows.filter(r=>r.conversation?.kind==='direct').map(r=>r.conversation_id).filter(Boolean);
+      const [memberResult,profileResult,messageResult,hiddenResult,channelResult,callResult]=await Promise.all([
         supabase.from('kc_conversation_members').select('conversation_id,user_id,last_read_at,joined_at').in('conversation_id',ids),
         supabase.from('kc_profiles').select('id,display_name,avatar_url,is_online').neq('id',session.user.id),
         supabase.from('kc_messages').select('id,conversation_id,sender_id,body,message_type,created_at,deleted_at')
           .in('conversation_id',ids).is('deleted_at',null).order('created_at',{ascending:false}).limit(500),
         supabase.from('kc_message_hidden').select('message_id').eq('user_id',session.user.id),
-        supabase.from('kc_channels').select('conversation_id,owner_id,title,description,invite_code,is_public,is_official,is_verified').in('conversation_id',ids)
+        supabase.from('kc_channels').select('conversation_id,owner_id,title,description,invite_code,is_public,is_official,is_verified').in('conversation_id',ids),
+        directConversationIds.length?supabase.from('kc_call_logs').select('conversation_id').in('conversation_id',directConversationIds):Promise.resolve({data:[],error:null})
       ]);
       if(memberResult.error) throw memberResult.error;
+      if(profileResult.error) throw profileResult.error;
       if(messageResult.error) throw messageResult.error;
       if(channelResult.error) throw channelResult.error;
+      if(callResult.error) console.warn('Direct chat call activity could not be checked:',callResult.error.message);
       const members=(memberResult.data||[]) as any[];
       const channelMap=new Map((channelResult.data||[]).map((channel:any)=>[channel.conversation_id,channel]));
+      const callActivityIds=new Set(((callResult.data||[]) as any[]).map((call:any)=>call.conversation_id).filter(Boolean));
       const hiddenIds=new Set((hiddenResult.data||[]).map((row:any)=>row.message_id));
       hiddenIds.forEach(id=>hiddenMessageIds.current.add(id));
       const inboxMessages=((messageResult.data||[]) as any[]).filter(message=>!hiddenIds.has(message.id)&&!hiddenMessageIds.current.has(message.id));
@@ -1158,10 +1163,12 @@ function GuftinApp() {
       const profileMap=new Map(profiles.filter(p=>peerIds.includes(p.id)).map(p=>[p.id,p]));
       const latest=new Map<string,any>();
       for(const message of inboxMessages) if(!latest.has(message.conversation_id)) latest.set(message.conversation_id,message);
-      const mapped:Chat[]=sortInboxChats(await Promise.all(rows.map(async row=>{
+      const mappedRows=await Promise.all(rows.map(async row=>{
         const conv=row.conversation||{};
         const peers=members.filter(m=>m.conversation_id===row.conversation_id&&m.user_id!==session.user.id);
         const peer=peers.length?profileMap.get(peers[0].user_id):null;
+        // A direct membership is not itself a conversation. Require a real registered peer profile.
+        if(conv.kind==='direct'&&(!peer||!peer.id))return null;
         const channel:any=channelMap.get(row.conversation_id);
         const name=conv.kind==='group'?(conv.title||'Group chat'):conv.kind==='channel'?(channel?.title||conv.title||'Channel'):(peer?.display_name||'Guftin member');
         const avatarPath=conv.kind==='group'?(conv.photo_url||null):(peer?.avatar_url||null);
@@ -1193,8 +1200,10 @@ function GuftinApp() {
           time:last?timeLabel(last.created_at):'',unread,online:!!peer?.is_online,kind:conv.kind||'direct',
           lastAt:last?new Date(last.created_at).getTime():new Date(conv.updated_at||row.joined_at).getTime(),
           isOfficial:!!channel?.is_official,isVerified:!!channel?.is_verified,isChannelOwner:channel?.owner_id===session.user.id,
-          inviteCode:channel?.invite_code,isPublic:channel?.is_public!==false,ownerId:channel?.owner_id,description:channel?.description||''};
-      })));
+          inviteCode:channel?.invite_code,isPublic:channel?.is_public!==false,ownerId:channel?.owner_id,description:channel?.description||'',
+          hasConversationActivity:!!last&&!!last.sender_id&&last.message_type!=='system',hasCallActivity:callActivityIds.has(row.conversation_id)};
+      });
+      const mapped:Chat[]=sortInboxChats(mappedRows.filter((chat):chat is Chat=>!!chat&&(chat.kind!=='direct'||chat.hasConversationActivity===true||chat.hasCallActivity===true)));
       setChats(mapped);
       void AsyncStorage.setItem(inboxCacheKey,JSON.stringify(mapped)).catch(()=>{});
     }catch(e:any){
