@@ -4,7 +4,7 @@ import NetInfo from '@react-native-community/netinfo';
 import {
   ActivityIndicator, Alert, Animated, AppState, BackHandler, FlatList, Image, KeyboardAvoidingView, Modal,
   Platform, RefreshControl, ScrollView, StatusBar, Switch, Text, TextInput, ToastAndroid,
-  TouchableOpacity, View
+  TouchableOpacity, View, useWindowDimensions
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from './src/lib/supabase';
@@ -379,6 +379,7 @@ function CallRoomScreen({callId,callType,onHangUp,callScope,sessionUserId}:any) 
   const {localParticipant,isMicrophoneEnabled,isCameraEnabled}=useLocalParticipant();
   const room=useRoomContext();
   const insets=useSafeAreaInsets();
+  const {height:windowHeight}=useWindowDimensions();
   const [speakerOn,setSpeakerOn]=useState(false);
   const [controlBusy,setControlBusy]=useState(false);
   const [recordingBusy,setRecordingBusy]=useState(false);
@@ -597,6 +598,7 @@ function CallRoomScreen({callId,callType,onHangUp,callScope,sessionUserId}:any) 
   const recordingLabel=recording?.status==='recording'?'RECORDING · ENCRYPTION TEMPORARILY OFF'
     :recording?.status==='awaiting_consent'?'WAITING FOR EVERYONE TO AGREE'
     :recording?.status==='switching_to_recording'?'PREPARING CONSENTED RECORDING':'SAVING RECORDING…';
+  const videoTileHeight=Math.max(112,Math.min(220,Math.floor((windowHeight-insets.top-insets.bottom-330-(recordingActive?46:0))/Math.max(1,Math.ceil(tracks.length/2)))));
 
   return <View style={{flex:1,backgroundColor:'#081d1b'}}>
     <SafeAreaView edges={['top','left','right']} style={{flex:1,backgroundColor:'#102b27'}}>
@@ -622,13 +624,13 @@ function CallRoomScreen({callId,callType,onHangUp,callScope,sessionUserId}:any) 
           numColumns={2} columnWrapperStyle={{gap:9}} style={{flex:1}}
           contentContainerStyle={{gap:9,paddingBottom:12,flexGrow:1}}
           renderItem={({item}:any)=>isTrackReference(item)
-            ?<View style={{flex:1,height:190,borderRadius:16,overflow:'hidden',backgroundColor:'#1b3832',borderWidth:1,borderColor:'#47766c'}}>
+            ?<View style={{flex:1,height:videoTileHeight,borderRadius:16,overflow:'hidden',backgroundColor:'#1b3832',borderWidth:1,borderColor:'#47766c'}}>
               <VideoTrack trackRef={item} style={{width:'100%',height:'100%'}}/>
               <View style={{position:'absolute',left:8,bottom:8,paddingHorizontal:8,paddingVertical:4,backgroundColor:'#061b18cc',borderRadius:8}}>
                 <Text style={{fontSize:10,color:'#fff',fontWeight:'800'}} numberOfLines={1}>{item.participant?.name||item.participant?.identity||'Participant'}</Text>
               </View>
             </View>
-            :<View style={{width:'48%',height:150,alignItems:'center',justifyContent:'center',backgroundColor:'#1b3832',borderRadius:16,borderWidth:1,borderColor:'#47766c'}}><Text style={{color:'#fff'}}>Camera is off</Text></View>}
+            :<View style={{width:'48%',height:videoTileHeight,alignItems:'center',justifyContent:'center',backgroundColor:'#1b3832',borderRadius:16,borderWidth:1,borderColor:'#47766c'}}><Text style={{color:'#fff'}}>Camera is off</Text></View>}
           ListEmptyComponent={<View style={{flex:1,minHeight:160,alignItems:'center',justifyContent:'center',padding:26}}>
             <Text style={{fontSize:40,color:'#d4f1e5'}}>▣</Text>
             <Text style={{fontSize:13,fontWeight:'800',color:'#fff',marginTop:12}}>Waiting for video participants…</Text>
@@ -640,7 +642,7 @@ function CallRoomScreen({callId,callType,onHangUp,callScope,sessionUserId}:any) 
         </View>}
       </View>
     </SafeAreaView>
-    <SafeAreaView edges={['bottom']} style={{backgroundColor:'#0c211e',borderTopWidth:1,borderColor:'#2b5348',paddingHorizontal:12,paddingTop:10,paddingBottom:Math.max(insets.bottom,10)+8}}>
+    <SafeAreaView edges={['bottom']} style={{backgroundColor:'#0c211e',borderTopWidth:1,borderColor:'#2b5348',paddingHorizontal:12,paddingTop:10,paddingBottom:10}}>
       <View style={{flexDirection:'row',flexWrap:'wrap',gap:8,justifyContent:'space-between'}}>
         <CallControlButton label={isMicrophoneEnabled?'🎙  Mic on':'🎙  Mic muted'} active={!isMicrophoneEnabled} disabled={controlBusy} onPress={()=>void toggleMicrophone()}/>
         <CallControlButton label={speakerOn?'🔊  Speaker on':'🔊  Speaker'} active={speakerOn} disabled={controlBusy} onPress={()=>void toggleSpeaker()}/>
