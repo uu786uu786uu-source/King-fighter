@@ -715,6 +715,7 @@ function GuftinApp() {
   const [deliveredByMessage,setDeliveredByMessage]=useState<Record<string,string>>({});
   const hiddenMessageIds=useRef(new Set<string>());
   const clearingConversationIds=useRef(new Set<string>());
+  const clearGenerationByConversation=useRef(new Map<string,number>());
   const handledNotificationResponses=useRef(new Set<string>());
   const joiningCallIds=useRef(new Set<string>());
   const endingCallIds=useRef(new Set<string>());
@@ -972,7 +973,8 @@ function GuftinApp() {
       if(messageResult.error) throw messageResult.error;
       const members=(memberResult.data||[]) as any[];
       const hiddenIds=new Set((hiddenResult.data||[]).map((row:any)=>row.message_id));
-      const inboxMessages=((messageResult.data||[]) as any[]).filter(message=>!hiddenIds.has(message.id));
+      hiddenIds.forEach(id=>hiddenMessageIds.current.add(id));
+      const inboxMessages=((messageResult.data||[]) as any[]).filter(message=>!hiddenIds.has(message.id)&&!hiddenMessageIds.current.has(message.id));
       const peerIds=[...new Set(members.filter(m=>m.user_id!==session.user.id).map(m=>m.user_id))];
       const profiles=(profileResult.error?[]:(profileResult.data||[])) as any[];
       const profileMap=new Map(profiles.filter(p=>peerIds.includes(p.id)).map(p=>[p.id,p]));
@@ -985,7 +987,8 @@ function GuftinApp() {
         const name=conv.kind==='group'?(conv.title||'Group chat'):(peer?.display_name||'Guftin member');
         const avatarPath=conv.kind==='group'?(conv.photo_url||null):(peer?.avatar_url||null);
         const avatarUrl=avatarPath?(await getSignedMediaUrl(avatarPath))||undefined:undefined;
-        const last=latest.get(row.conversation_id);
+        let last=latest.get(row.conversation_id);
+        if(last&&hiddenMessageIds.current.has(last.id))last=undefined;
         const readThrough=Math.max(
           row.last_read_at?new Date(row.last_read_at).getTime():0,
           row.joined_at?new Date(row.joined_at).getTime():0
@@ -1301,6 +1304,7 @@ function GuftinApp() {
     if(sending||mediaPreparing){Alert.alert('Please wait','Finish the current message or media upload before clearing this chat.');return;}
     const conversationId=chat.id;
     if(clearingConversationIds.current.has(conversationId))return;
+    clearGenerationByConversation.current.set(conversationId,(clearGenerationByConversation.current.get(conversationId)||0)+1);
     clearingConversationIds.current.add(conversationId);
     try{
       let attempts=0;
@@ -1359,7 +1363,11 @@ function GuftinApp() {
       }
       await AsyncStorage.removeItem(cacheKey);
       setMessages(prev=>({...prev,[conversationId]:[]}));
-      setChats(prev=>prev.map(item=>item.id===conversationId?{...item,last:'No messages yet',time:'',unread:0,lastAt:0}:item));
+      setChats(prev=>{
+        const next=prev.map(item=>item.id===conversationId?{...item,last:'No messages yet',time:'',unread:0,lastAt:0}:item);
+        void AsyncStorage.setItem('guftin-cache-inbox:'+session.user.id,JSON.stringify(next)).catch(()=>{});
+        return next;
+      });
       setPeerLastReadAt(null);
       if(activeConversationIdRef.current===conversationId)setDraft('');
       void loadInbox();
@@ -1514,7 +1522,7 @@ function GuftinApp() {
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'kc_messages'},async payload=>{
         const m=payload.new as any;
         const item=await resolveMessage(m);
-        if(clearingConversationIds.current.has(m.conversation_id))return;
+        if(clearingConversationIds.current.has(m.conversation_id)||hiddenMessageIds.current.has(m.id))return;
         setMessages(prev=>{
           const old=prev[m.conversation_id]||[];
           return {...prev,[m.conversation_id]:old.some(x=>x.id===m.id)?old:[...old,item]};
@@ -1722,11 +1730,12 @@ function GuftinApp() {
 
   const loadMessages=useCallback(async(conversationId:string)=>{
     if(!session||clearingConversationIds.current.has(conversationId))return;
+    const loadGeneration=clearGenerationByConversation.current.get(conversationId)||0;
     const messageCacheKey='guftin-cache-messages:'+session.user.id+':'+conversationId;
     let cachedMessages:Message[]=[];
     try{
       const cached=await AsyncStorage.getItem(messageCacheKey);
-      if(cached){const parsed=JSON.parse(cached);if(Array.isArray(parsed)){cachedMessages=parsed;setMessages(prev=>({...prev,[conversationId]:parsed}));}}
+      if(cached){const parsed=JSON.parse(cached);if(Array.isArray(parsed)){cachedMessages=parsed;if(!clearingConversationIds.current.has(conversationId)&&(clearGenerationByConversation.current.get(conversationId)||0)===loadGeneration)setMessages(prev=>({...prev,[conversationId]:parsed}));}}
     }catch{ /* Ignore a damaged message cache and continue with the server request. */ }
     // Restore text messages waiting for delivery, even if the app was restarted.
     let pendingTextItems:Message[]=[];
@@ -1799,7 +1808,7 @@ function GuftinApp() {
     }));
     const combined=[...resolved,...offlinePendingItems.filter(pending=>!resolved.some(item=>item.id===pending.id))]
       .sort((a,b)=>new Date(a.created_at).getTime()-new Date(b.created_at).getTime());
-    if(clearingConversationIds.current.has(conversationId))return;
+    if(clearingConversationIds.current.has(conversationId)||(clearGenerationByConversation.current.get(conversationId)||0)!==loadGeneration)return;
     setMessages(prev=>({...prev,[conversationId]:combined}));
     void AsyncStorage.setItem(messageCacheKey,JSON.stringify(combined)).catch(()=>{});
     const ownMessageIds=visibleRows.filter((m:any)=>m.sender_id===session.user.id&&!m.deleted_at).map((m:any)=>m.id);
@@ -1826,7 +1835,7 @@ function GuftinApp() {
   loadMessagesRef.current=loadMessages;
 
   useEffect(()=>{
-    if(session&&deviceIdentity&&active)void loadMessages(active.id);
+    if(session&&active)void loadMessages(active.id);
   },[session?.user?.id,deviceIdentity?.deviceId,active?.id,loadMessages]);
 
   const refresh=async()=>{
