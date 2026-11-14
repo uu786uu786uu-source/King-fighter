@@ -1088,11 +1088,12 @@ function GuftinApp() {
         body=decrypted.fileName;
       }catch(e:any){
         attachment_url=null;
-        body='🔒 Encrypted media — '+(e?.message||'unable to decrypt on this device.');
+        body='Media is unavailable on this device.';
       }
     }else if(typeof body==='string'&&body.startsWith(E2EE_PREFIX)){
       try{
-        body=deviceIdentity?decryptMessageForDevice(body,deviceIdentity):'🔒 Encrypted message — this device key is not ready.';
+        if(!deviceIdentity)throw new Error('The local device key is not ready.');
+        body=decryptMessageForDevice(body,deviceIdentity);
       }catch(e:any){
         body=cachedPlaintextIsValid?cached!.body:'This message is unavailable on this device.';
       }
@@ -1297,6 +1298,7 @@ function GuftinApp() {
 
   const clearChatForMe=async(chat:Chat)=>{
     if(!session)return;
+    if(sending||mediaPreparing){Alert.alert('Please wait','Finish the current message or media upload before clearing this chat.');return;}
     const conversationId=chat.id;
     if(clearingConversationIds.current.has(conversationId))return;
     clearingConversationIds.current.add(conversationId);
@@ -1512,6 +1514,7 @@ function GuftinApp() {
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'kc_messages'},async payload=>{
         const m=payload.new as any;
         const item=await resolveMessage(m);
+        if(clearingConversationIds.current.has(m.conversation_id))return;
         setMessages(prev=>{
           const old=prev[m.conversation_id]||[];
           return {...prev,[m.conversation_id]:old.some(x=>x.id===m.id)?old:[...old,item]};
@@ -1718,7 +1721,7 @@ function GuftinApp() {
   },[session,respondToCall,acceptCallWhenReady,loadInbox,joinCall]);
 
   const loadMessages=useCallback(async(conversationId:string)=>{
-    if(!session) return;
+    if(!session||clearingConversationIds.current.has(conversationId))return;
     const messageCacheKey='guftin-cache-messages:'+session.user.id+':'+conversationId;
     let cachedMessages:Message[]=[];
     try{
@@ -1796,6 +1799,7 @@ function GuftinApp() {
     }));
     const combined=[...resolved,...offlinePendingItems.filter(pending=>!resolved.some(item=>item.id===pending.id))]
       .sort((a,b)=>new Date(a.created_at).getTime()-new Date(b.created_at).getTime());
+    if(clearingConversationIds.current.has(conversationId))return;
     setMessages(prev=>({...prev,[conversationId]:combined}));
     void AsyncStorage.setItem(messageCacheKey,JSON.stringify(combined)).catch(()=>{});
     const ownMessageIds=visibleRows.filter((m:any)=>m.sender_id===session.user.id&&!m.deleted_at).map((m:any)=>m.id);
@@ -1858,6 +1862,7 @@ function GuftinApp() {
     const entry={id,localId,conversation_id:conversationId,text,created_at:createdAt};
     let queue:any[]=[];
     try{const raw=await AsyncStorage.getItem(queueKey);queue=raw?JSON.parse(raw):[];if(!Array.isArray(queue))queue=[];}catch{queue=[];}
+    if(clearingConversationIds.current.has(conversationId))throw new Error('This chat is being cleared. Please try again in a moment.');
     queue.push(entry);
     await AsyncStorage.setItem(queueKey,JSON.stringify(queue));
     const optimistic:Message={id:localId,conversation_id:conversationId,sender_id:session.user.id,body:text,message_type:'text',created_at:createdAt,mine:true,pending:true};
@@ -1984,6 +1989,7 @@ function GuftinApp() {
     const queueKey='guftin-pending-media:'+session.user.id;
     let queue:any[]=[];
     try{const raw=await AsyncStorage.getItem(queueKey);queue=raw?JSON.parse(raw):[];if(!Array.isArray(queue))queue=[];}catch{queue=[];}
+    if(clearingConversationIds.current.has(conversationId))throw new Error('This chat is being cleared. Please try again in a moment.');
     queue.push(entry);
     await AsyncStorage.setItem(queueKey,JSON.stringify(queue));
     void AsyncStorage.setItem('guftin-cache-messages:'+session.user.id+':'+conversationId,
@@ -2057,6 +2063,7 @@ function GuftinApp() {
               });
               if(uploadError&&String(uploadError.message||'').toLowerCase().includes('already exists')===false)throw uploadError;
             }
+            if(clearingConversationIds.current.has(pending.conversation_id))continue;
             const inserted=await supabase.from('kc_messages').insert({
               id:pending.id,conversation_id:pending.conversation_id,sender_id:session.user.id,
               body:outboundBody,message_type:pending.message_type,attachment_url:objectPath
