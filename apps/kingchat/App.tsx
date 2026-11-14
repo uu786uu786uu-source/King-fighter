@@ -3219,10 +3219,11 @@ function GuftinApp() {
         else for(const statusId of unseenIds)void dispatchPush('status_view',statusId);
       }
     }
-    const [peopleResult,viewsResult,likesResult]=await Promise.all([
+    const [peopleResult,viewsResult,likesResult,officialResult]=await Promise.all([
       supabase.from('kc_profiles').select('id,display_name,username,avatar_url').in('id',[...new Set(rows.map(row=>row.user_id))]),
       supabase.from('kc_status_views').select('status_id,viewer_id,viewed_at').in('status_id',ids),
-      supabase.from('kc_status_likes').select('status_id,user_id,created_at').in('status_id',ids)
+      supabase.from('kc_status_likes').select('status_id,user_id,created_at').in('status_id',ids),
+      supabase.from('kc_channels').select('owner_id').eq('is_official',true).maybeSingle()
     ]);
     const people=new Map((peopleResult.data||[]).map((person:any)=>[person.id,person]));
     const statusActorIds=[...new Set([
@@ -3253,8 +3254,9 @@ function GuftinApp() {
       const likes=(likesResult.data||[]).filter((like:any)=>like.status_id===row.id);
       return {
         ...row,
-        display_name:(people.get(row.user_id) as any)?.display_name||'Guftin member',
-        username:(people.get(row.user_id) as any)?.username||'',
+        display_name:row.user_id===officialResult.data?.owner_id?'Guftin Official':((people.get(row.user_id) as any)?.display_name||'Guftin member'),
+        username:row.user_id===officialResult.data?.owner_id?'':((people.get(row.user_id) as any)?.username||''),
+        is_verified:row.user_id===officialResult.data?.owner_id,
         avatar_signed_url:avatarSigned,
         status_count:rows.filter(candidate=>candidate.user_id===row.user_id).length,
         media_signed_url:playableMedia,
@@ -3453,15 +3455,15 @@ function GuftinApp() {
       <View style={{minHeight:82,backgroundColor:C.white,flexDirection:'row',alignItems:'center',paddingHorizontal:12,paddingVertical:7,borderBottomWidth:1,borderColor:C.line,elevation:2}}>
         <Btn onPress={()=>setActive(null)} style={{padding:10}}><Text style={{fontSize:24,color:C.ink}}>‹</Text></Btn>
         <Avatar label={active.avatar} color={active.color} size={43} online={active.online} uri={active.avatarUrl}/>
-        <Btn onPress={()=>void openChatDetails()} style={{flex:1,marginLeft:11,alignItems:'flex-start'}}>
-          <Text numberOfLines={1} style={{fontWeight:'900',fontSize:15,color:C.ink}}>{active.name}</Text>
-          <Text style={{fontSize:11,color:active.online?C.green:C.muted}}>{active.kind==='group'?'Tap for group info':outgoingCall?'Calling…':active.online?'● online':'Tap for contact info'}</Text>
+        <Btn onPress={()=>active.kind==='channel'?showChannelOptions():void openChatDetails()} style={{flex:1,marginLeft:11,alignItems:'flex-start'}}>
+          <View style={{flexDirection:'row',alignItems:'center',gap:5}}><Text numberOfLines={1} style={{fontWeight:'900',fontSize:15,color:C.ink}}>{active.name}</Text>{active.isVerified?<Text style={{color:'#2387e8',fontWeight:'900'}}>●✓</Text>:null}</View>
+          <Text style={{fontSize:11,color:active.isOfficial?C.green:active.online?C.green:C.muted}}>{active.kind==='channel'?(active.isOfficial?'Official Guftin announcements':active.isChannelOwner?'Your channel · publish updates':'Channel · read-only'):active.kind==='group'?'Tap for group info':outgoingCall?'Calling…':active.online?'● online':'Tap for contact info'}</Text>
         </Btn>
-        {outgoingCall?<Btn onPress={()=>void endCall(outgoingCall.id)} style={{backgroundColor:'#fde8e8',borderRadius:15,width:62,height:58,alignItems:'center',justifyContent:'center',borderWidth:1,borderColor:'#f3c6c6'}}><Text style={{fontSize:11,fontWeight:'900',color:C.red}}>Cancel</Text><Text style={{fontSize:9,color:C.red}}>call</Text></Btn>:<>
+        {active.kind!=='channel'?(outgoingCall?<Btn onPress={()=>void endCall(outgoingCall.id)} style={{backgroundColor:'#fde8e8',borderRadius:15,width:62,height:58,alignItems:'center',justifyContent:'center',borderWidth:1,borderColor:'#f3c6c6'}}><Text style={{fontSize:11,fontWeight:'900',color:C.red}}>Cancel</Text><Text style={{fontSize:9,color:C.red}}>call</Text></Btn>:<>
           <Btn disabled={callBusy} onPress={()=>void startCall('voice')} style={{backgroundColor:C.mint,borderRadius:15,width:56,height:58,alignItems:'center',justifyContent:'center',opacity:callBusy?0.5:1,borderWidth:1,borderColor:'#cce9dc'}}><Text style={{fontSize:20,color:C.green}}>☎</Text><Text style={{fontSize:10,fontWeight:'900',color:C.green}}>{active.kind==='group'?'Group call':'Call'}</Text></Btn>
           <Btn disabled={callBusy} onPress={()=>void startCall('video')} style={{backgroundColor:C.mint,borderRadius:15,width:56,height:58,alignItems:'center',justifyContent:'center',opacity:callBusy?0.5:1,borderWidth:1,borderColor:'#cce9dc'}}><Text style={{fontSize:19,color:C.green}}>▣</Text><Text style={{fontSize:10,fontWeight:'900',color:C.green}}>Video</Text></Btn>
-        </>}
-        <Btn onPress={()=>Alert.alert('Chat options',active.name,[
+        </>):null}
+        <Btn onPress={()=>active.kind==='channel'?showChannelOptions():Alert.alert('Chat options',active.name,[
           {text:'Chat info',onPress:()=>void openChatDetails()},
           {text:'Clear Chat',style:'destructive',onPress:()=>Alert.alert('Clear this chat?', 'This removes the messages from your Guftin account on this phone. The other participant keeps their chat history.',[
             {text:'Cancel',style:'cancel'},
@@ -3472,7 +3474,7 @@ function GuftinApp() {
       </View>
       <FlatList ref={chatMessagesListRef} data={list} keyExtractor={m=>m.id} keyboardShouldPersistTaps="handled" style={{flex:1}} contentContainerStyle={{padding:18,gap:12,flexGrow:1,justifyContent:list.length?'flex-end':'center'}}
         ListEmptyComponent={<Text style={{textAlign:'center',color:C.muted}}>No messages yet. Send the first message.</Text>}
-        renderItem={({item})=><TouchableOpacity activeOpacity={1} onLongPress={()=>deleteMessage(item)} delayLongPress={420} style={{alignSelf:item.mine?'flex-end':'flex-start',maxWidth:'84%',backgroundColor:item.mine?'#dff4e8':C.white,padding:13,borderRadius:17,borderTopRightRadius:item.mine?5:17,borderTopLeftRadius:item.mine?17:5}}>
+        renderItem={({item})=><TouchableOpacity activeOpacity={1} onLongPress={active.kind==='channel'&&!active.isChannelOwner?undefined:()=>deleteMessage(item)} delayLongPress={420} style={{alignSelf:item.mine?'flex-end':'flex-start',maxWidth:'84%',backgroundColor:item.mine?'#dff4e8':C.white,padding:13,borderRadius:17,borderTopRightRadius:item.mine?5:17,borderTopLeftRadius:item.mine?17:5}}>
           {item.deleted_at?<Text style={{fontSize:12,color:C.muted,fontStyle:'italic'}}>This message was deleted</Text>:item.message_type==='image'&&item.attachment_url?<Image source={{uri:item.attachment_url}} style={{width:210,height:210,borderRadius:12}} resizeMode="cover"/>:item.message_type==='video'&&item.attachment_url?<VideoBubble uri={item.attachment_url}/>:item.message_type==='audio'&&item.attachment_url?<AudioBubble uri={item.attachment_url}/>:item.message_type==='file'&&item.attachment_url?<View style={{minWidth:225,maxWidth:270,backgroundColor:C.paper,borderRadius:13,padding:12}}>
             <Text style={{fontSize:25,color:C.green}}>▤</Text>
             <Text numberOfLines={2} style={{fontSize:13,fontWeight:'900',color:C.ink,marginTop:5}}>{item.body||'Document'}</Text>
@@ -3487,12 +3489,16 @@ function GuftinApp() {
           </Text>
         </TouchableOpacity>}/>
       <View style={{flexDirection:'row',alignItems:'center',padding:11,gap:8,backgroundColor:C.white,borderTopWidth:1,borderColor:C.line}}>
-          <Btn disabled={mediaPreparing} onPress={sendMedia} style={{width:42,height:42,borderRadius:15,backgroundColor:C.paper,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:23,color:C.green}}>＋</Text></Btn>
-          <Btn disabled={sending||recordingBusy} onPress={recording?stopVoiceRecording:startVoiceRecording} style={{width:42,height:42,borderRadius:15,backgroundColor:recording?'#fde8e8':C.paper,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:18,color:recording?C.red:C.green}}>{recording?'■':'🎙'}</Text></Btn>
-          <TextInput value={draft} onChangeText={setDraft} onFocus={()=>requestAnimationFrame(()=>chatMessagesListRef.current?.scrollToEnd({animated:true}))} placeholder={recording?'Recording… tap ■ to send':'Write a message...'} multiline maxLength={4000} style={{flex:1,minHeight:46,maxHeight:110,backgroundColor:C.paper,borderRadius:16,paddingHorizontal:15,paddingVertical:12,color:C.ink,textAlignVertical:'center'}}/>
-          <Btn disabled={!draft.trim()||sending} onPress={sendMessage} style={{backgroundColor:C.green,width:46,height:46,borderRadius:16,alignItems:'center',justifyContent:'center'}}>
-            {sending?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontSize:20}}>➤</Text>}
-          </Btn>
+        {active.kind==='channel'&&!active.isChannelOwner
+          ?<Text style={{flex:1,textAlign:'center',fontSize:12,color:C.muted,fontWeight:'800',paddingVertical:12}}>Only the channel owner can publish updates.</Text>
+          :<>
+            <Btn disabled={mediaPreparing} onPress={sendMedia} style={{width:42,height:42,borderRadius:15,backgroundColor:C.paper,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:23,color:C.green}}>＋</Text></Btn>
+            {active.kind!=='channel'?<Btn disabled={sending||recordingBusy} onPress={recording?stopVoiceRecording:startVoiceRecording} style={{width:42,height:42,borderRadius:15,backgroundColor:recording?'#fde8e8':C.paper,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:18,color:recording?C.red:C.green}}>{recording?'■':'🎙'}</Text></Btn>:null}
+            <TextInput value={draft} onChangeText={setDraft} onFocus={()=>requestAnimationFrame(()=>chatMessagesListRef.current?.scrollToEnd({animated:true}))} placeholder={active.kind==='channel'?'Write a channel update…':recording?'Recording… tap ■ to send':'Write a message...'} multiline maxLength={4000} style={{flex:1,minHeight:46,maxHeight:110,backgroundColor:C.paper,borderRadius:16,paddingHorizontal:15,paddingVertical:12,color:C.ink,textAlignVertical:'center'}}/>
+            <Btn disabled={!draft.trim()||sending} onPress={sendMessage} style={{backgroundColor:C.green,width:46,height:46,borderRadius:16,alignItems:'center',justifyContent:'center'}}>
+              {sending?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontSize:20}}>➤</Text>}
+            </Btn>
+          </>}
       </View>
     <Modal visible={chatDetailsOpen} animationType="slide" onRequestClose={()=>setChatDetailsOpen(false)}>
       <SafeAreaView style={{flex:1,backgroundColor:C.paper}}>
@@ -3601,7 +3607,7 @@ function GuftinApp() {
       {statuses.length===0?<Text style={{color:C.muted,textAlign:'center',padding:30}}>No active statuses from your contacts yet.</Text>:statuses.map((status:any)=><View key={status.id} style={{padding:14,borderBottomWidth:1,borderColor:C.line,flexDirection:'row',gap:12}}>
         <Avatar label={initials(status.display_name)} color={colorFor(status.user_id)} size={46} uri={status.avatar_signed_url}/>
         <View style={{flex:1}}>
-          <Text style={{fontWeight:'900',color:C.ink}}>{status.user_id===session.user.id?'You':status.display_name}{status.username?'  @'+status.username:''}</Text>
+          <View style={{flexDirection:'row',alignItems:'center',gap:5,flexWrap:'wrap'}}><Text style={{fontWeight:'900',color:C.ink}}>{status.user_id===session.user.id?'You':status.display_name}{status.username?'  @'+status.username:''}</Text>{status.is_verified?<Text style={{color:'#2387e8',fontSize:13,fontWeight:'900'}}>●✓</Text>:null}</View>
           {status.media_signed_url?(status.media_url?.toLowerCase().match(/\.(mp4|mov|m4v)$/)?<VideoBubble uri={status.media_signed_url}/>:<Image source={{uri:status.media_signed_url}} style={{width:210,height:190,borderRadius:14,marginTop:8}} resizeMode="cover"/>):null}
           {status.caption?<Text style={{color:C.ink,lineHeight:20,marginTop:5}}>{status.caption}</Text>:null}
           <Text style={{color:C.muted,fontSize:10,marginTop:5}}>{timeLabel(status.created_at)} · {status.status_count} status update{status.status_count===1?'':'s'} from this person</Text>
