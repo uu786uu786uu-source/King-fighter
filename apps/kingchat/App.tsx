@@ -908,6 +908,7 @@ function GuftinApp() {
   const [groupCreating,setGroupCreating]=useState(false);
   const [channels,setChannels]=useState<any[]>([]);
   const [channelsLoading,setChannelsLoading]=useState(false);
+  const [channelSearch,setChannelSearch]=useState('');
   const [channelCreateOpen,setChannelCreateOpen]=useState(false);
   const [channelJoinOpen,setChannelJoinOpen]=useState(false);
   const [channelTitle,setChannelTitle]=useState('');
@@ -2225,6 +2226,11 @@ function GuftinApp() {
       Alert.alert('Following channel','You are now following '+(channel.title||'this channel')+'.');
     }catch(error:any){Alert.alert('Could not follow channel',error?.message||'Please try again.');}
     finally{setChannelBusy(false);}
+  };
+
+  const openGuftinSupport=async()=>{
+    const url='mailto:guftinofficle@gmail.com?subject=Guftin%20Support%20or%20Complaint';
+    try{await Linking.openURL(url);}catch{Alert.alert('Contact Guftin Official','Email: guftinofficle@gmail.com');}
   };
 
   const shareChannelInvite=async(channel:any)=>{
@@ -3584,7 +3590,12 @@ function GuftinApp() {
       <TextInput value={profileUsername} onChangeText={v=>setProfileUsername(v.toLowerCase().replace(/[^a-z0-9_]/g,''))} placeholder="Username (3-24 characters)" autoCapitalize="none" style={{backgroundColor:C.white,borderRadius:15,padding:16,marginBottom:10,color:C.ink}}/>
       <Text style={{fontSize:11,color:C.muted,marginBottom:14}}>Allowed: lowercase letters, numbers and underscore.</Text>
       <Btn disabled={savingProfile} onPress={finishProfile} style={{backgroundColor:C.green,padding:17,borderRadius:16,alignItems:'center'}}>{savingProfile?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'900'}}>Save and continue</Text>}</Btn>
-      <Btn onPress={()=>supabase.auth.signOut()} style={{padding:15,alignItems:'center'}}><Text style={{color:C.red,fontWeight:'700'}}>Sign out</Text></Btn>
+      <Btn onPress={()=>supabase.auth.signOut()} style={{padding:15,alignItems:'center'}}><Text style={{color:C.red,fontWeight:'700'}}<View style={{padding:15,backgroundColor:C.mint,borderRadius:14,marginTop:18}}>
+        <Text style={{fontWeight:'900',color:C.green}}>Contact Guftin Official</Text>
+        <Text style={{color:C.ink,fontSize:12,lineHeight:18,marginTop:6}}>For complaints, feedback, feature requests or any question about Guftin, contact our official team directly.</Text>
+        <Btn onPress={()=>void openGuftinSupport()} style={{backgroundColor:C.green,padding:13,borderRadius:12,alignItems:'center',marginTop:10}}><Text style={{color:'#fff',fontWeight:'900'}}>Email Guftin Official · guftinofficle@gmail.com</Text></Btn>
+      </View>
+      >Sign out</Text></Btn>
     </SafeAreaView>;
   }
 
@@ -3781,6 +3792,11 @@ function GuftinApp() {
     </KeyboardAvoidingView>;
   }
 
+  const searchableChannels=channels.filter(channel=>channel.owner_id===session?.user?.id||channel.is_public===true||channel.isFollowing);
+  const channelQuery=channelSearch.trim().toLowerCase();
+  const ownChannels=searchableChannels.filter(channel=>channel.owner_id===session?.user?.id&&(!channelQuery||[channel.title,channel.handle,channel.description].some(value=>String(value||'').toLowerCase().includes(channelQuery))));
+  const discoverChannels=searchableChannels.filter(channel=>channel.owner_id!==session?.user?.id&&(!channelQuery||[channel.title,channel.handle,channel.description].some(value=>String(value||'').toLowerCase().includes(channelQuery))));
+
   return <SafeAreaView edges={['top','left','right']} style={{flex:1,backgroundColor:C.white}}>
     <StatusBar barStyle="dark-content"/>
     <View style={{paddingHorizontal:18,paddingTop:14,paddingBottom:13,flexDirection:'row',alignItems:'center',justifyContent:'space-between'}}>
@@ -3863,28 +3879,19 @@ function GuftinApp() {
         </View>
       </View>
       {channelsLoading&&channels.length===0?<View style={{padding:30,alignItems:'center'}}><ActivityIndicator color={C.green}/><Text style={{color:C.muted,marginTop:8}}>Loading channels…</Text></View>:null}
+      <TextInput value={channelSearch} onChangeText={setChannelSearch} placeholder="Search public channels by name..." autoCapitalize="none" returnKeyType="search" style={{backgroundColor:C.paper,borderRadius:14,padding:14,color:C.ink,marginBottom:15}}/>
       <Text style={{fontSize:16,fontWeight:'900',color:C.ink,marginBottom:9}}>Your channels</Text>
-      {channels.filter(channel=>channel.owner_id===session.user.id).length===0
-        ?<Text style={{fontSize:12,color:C.muted,marginBottom:16}}>You have not created a channel yet.</Text>
-        :channels.filter(channel=>channel.owner_id===session.user.id).map(channel=><View key={channel.conversation_id} style={{backgroundColor:C.white,borderRadius:17,padding:13,marginBottom:9,borderWidth:1,borderColor:C.line}}>
-          <View style={{flexDirection:'row',alignItems:'center',gap:11}}>
-            <Avatar label={initials(channel.title||'C')} color={C.green} size={46} uri={channel.logo_signed_url}/>
-            <View style={{flex:1}}><Text style={{fontSize:14,fontWeight:'900',color:C.ink}}>{channel.title||'My channel'}{channel.is_verified?<VerifiedBadge label="Verified channel"/>:null}</Text><Text style={{fontSize:10,color:C.muted,marginTop:3}}>{channel.is_public?'Public channel':'Private · invite link only'} · Owner</Text></View>
-            <Btn onPress={()=>void shareChannelInvite(channel)} style={{padding:9,borderRadius:11,backgroundColor:C.mint}}><Text style={{fontSize:11,color:C.green,fontWeight:'900'}}>Invite ↗</Text></Btn>
-          </View>
-          <Text numberOfLines={2} style={{fontSize:11,color:C.muted,lineHeight:16,marginTop:8}}>{channel.description||'No channel description'}</Text>
-          <Btn onPress={()=>openChannelChat(channel)} style={{marginTop:10,backgroundColor:C.paper,padding:10,borderRadius:11,alignItems:'center'}}><Text style={{fontSize:11,color:C.green,fontWeight:'900'}}>Open channel ›</Text></Btn>
-        </View>)}
-      <Text style={{fontSize:16,fontWeight:'900',color:C.ink,marginTop:13,marginBottom:9}}>Followed and discover</Text>
-      {channels.filter(channel=>channel.owner_id!==session.user.id).length===0
-        ?<Text style={{fontSize:12,color:C.muted}}>No public channels to discover yet. Share your own channel link to invite followers.</Text>
-        :channels.filter(channel=>channel.owner_id!==session.user.id).map(channel=><View key={channel.conversation_id} style={{flexDirection:'row',alignItems:'center',gap:11,padding:12,borderBottomWidth:1,borderColor:C.line}}>
-          <Avatar label={initials(channel.title||'C')} color={C.green} size={44} uri={channel.logo_signed_url}/>
-          <View style={{flex:1}}><Text style={{fontSize:13,fontWeight:'900',color:C.ink}}>{channel.title||'Guftin channel'}{channel.is_verified?<VerifiedBadge label="Verified channel"/>:null}</Text><Text numberOfLines={2} style={{fontSize:10,color:C.muted,marginTop:3}}>{channel.description|| (channel.is_public?'Public channel':'Private channel')}</Text></View>
-          {channel.isFollowing?<Btn onPress={()=>openChannelChat(channel)} style={{paddingHorizontal:13,paddingVertical:9,borderRadius:11,backgroundColor:C.mint}}><Text style={{color:C.green,fontWeight:'900',fontSize:11}}>Open</Text></Btn>
-            :channel.is_public?<Btn disabled={channelBusy} onPress={()=>void followPublicChannel(channel)} style={{paddingHorizontal:13,paddingVertical:9,borderRadius:11,backgroundColor:C.green}}><Text style={{color:'#fff',fontWeight:'900',fontSize:11}}>Follow</Text></Btn>
-            :<Btn onPress={()=>setChannelJoinOpen(true)} style={{paddingHorizontal:13,paddingVertical:9,borderRadius:11,backgroundColor:C.paper}}><Text style={{color:C.green,fontWeight:'900',fontSize:11}}>Invite only</Text></Btn>}
-        </View>)}
+      {ownChannels.length===0?<Text style={{fontSize:12,color:C.muted,marginBottom:16}}>{channelQuery?'No channel you own matches this name.':'You have not created a channel yet.'}</Text>:ownChannels.map(channel=><View key={channel.conversation_id} style={{backgroundColor:C.white,borderRadius:17,padding:13,marginBottom:9,borderWidth:1,borderColor:C.line}}>
+        <View style={{flexDirection:'row',alignItems:'center',gap:11}}><Avatar label={initials(channel.title||'C')} color={C.green} size={46} uri={channel.logo_signed_url}/><View style={{flex:1}}><Text style={{fontSize:14,fontWeight:'900',color:C.ink}}>{channel.title||'My channel'}{channel.is_verified?<VerifiedBadge label="Verified channel"/>:null}</Text><Text style={{fontSize:10,color:C.muted,marginTop:3}}>{channel.is_public?'Public channel':'Private · invite link only'} · Owner</Text></View><Btn onPress={()=>void shareChannelInvite(channel)} style={{padding:9,borderRadius:11,backgroundColor:C.mint}}><Text style={{fontSize:11,color:C.green,fontWeight:'900'}}>Invite ↗</Text></Btn></View>
+        <Text numberOfLines={2} style={{fontSize:11,color:C.muted,lineHeight:16,marginTop:8}}>{channel.description||'No channel description'}</Text>
+        <Btn onPress={()=>openChannelChat(channel)} style={{marginTop:10,backgroundColor:C.paper,padding:10,borderRadius:11,alignItems:'center'}}><Text style={{fontSize:11,color:C.green,fontWeight:'900'}}>Open channel ›</Text></Btn>
+      </View>)}
+      <Text style={{fontSize:16,fontWeight:'900',color:C.ink,marginTop:13,marginBottom:9}}>Discover channels</Text>
+      <Text style={{fontSize:11,color:C.muted,marginBottom:9}}>Search by channel name and follow any public channel. Private channels remain invite-only.</Text>
+      {discoverChannels.length===0?<Text style={{fontSize:12,color:C.muted}}>{channelQuery?'No public channels match that name.':'No public channels to discover yet. Share your channel link to invite followers.'}</Text>:discoverChannels.map(channel=><View key={channel.conversation_id} style={{flexDirection:'row',alignItems:'center',gap:11,padding:12,borderBottomWidth:1,borderColor:C.line}}>
+        <Avatar label={initials(channel.title||'C')} color={C.green} size={44} uri={channel.logo_signed_url}/><View style={{flex:1}}><Text style={{fontSize:13,fontWeight:'900',color:C.ink}}>{channel.title||'Guftin channel'}{channel.is_verified?<VerifiedBadge label="Verified channel"/>:null}</Text><Text numberOfLines={2} style={{fontSize:10,color:C.muted,marginTop:3}}>{channel.description||'Public channel'}</Text></View>
+        {channel.isFollowing?<Btn onPress={()=>openChannelChat(channel)} style={{paddingHorizontal:13,paddingVertical:9,borderRadius:11,backgroundColor:C.mint}}><Text style={{color:C.green,fontWeight:'900',fontSize:11}}>Open</Text></Btn>:<Btn disabled={channelBusy} onPress={()=>void followPublicChannel(channel)} style={{paddingHorizontal:13,paddingVertical:9,borderRadius:11,backgroundColor:C.green}}><Text style={{color:'#fff',fontWeight:'900',fontSize:11}}>Follow</Text></Btn>}
+      </View>)}
       <Text style={{fontSize:10,color:C.muted,lineHeight:16,marginTop:18}}>Channel posts are broadcast content. They are visible to followers and are not end-to-end encrypted like private one-to-one messages.</Text>
     </ScrollView>:null}
     {tab==='Calls'?<ScrollView contentContainerStyle={{padding:18,paddingBottom:30}}>
