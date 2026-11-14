@@ -1501,7 +1501,11 @@ function GuftinApp() {
       .update({hidden_at:new Date().toISOString()})
       .eq('conversation_id',chat.id).eq('user_id',session.user.id);
     if(error){Alert.alert('Chat not deleted',error.message);return;}
-    setChats(prev=>prev.filter(item=>item.id!==chat.id));
+    setChats(prev=>{
+      const next=prev.filter(item=>item.id!==chat.id);
+      void AsyncStorage.setItem('guftin-cache-inbox:'+session.user.id,JSON.stringify(next)).catch(()=>{});
+      return next;
+    });
     if(active?.id===chat.id)setActive(null);
   };
 
