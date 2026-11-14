@@ -252,7 +252,7 @@ const THEMES:any = {
   sunset:{ink:'#472b2b',muted:'#987c73',green:'#d45b42',mint:'#ffede4',paper:'#fff7f2',white:'#fff',line:'#f3e4dc',red:'#b63f4b'},
   night:{ink:'#edf3ff',muted:'#9baac0',green:'#77b9ff',mint:'#223d5d',paper:'#101a2b',white:'#1a2940',line:'#2a3b54',red:'#ff8894'}
 };
-type Chat = { id:string; name:string; avatar:string; avatarUrl?:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number; isOfficial?:boolean; isVerified?:boolean; isChannelOwner?:boolean; inviteCode?:string; isPublic?:boolean; ownerId?:string; description?:string; hasConversationActivity?:boolean; hasCallActivity?:boolean };
+type Chat = { id:string; name:string; avatar:string; avatarUrl?:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number; isOfficial?:boolean; isVerified?:boolean; isChannelOwner?:boolean; inviteCode?:string; isPublic?:boolean; ownerId?:string; description?:string; hasConversationActivity?:boolean; hasCallActivity?:boolean; pendingContactId?:string; hasPendingActivity?:boolean };
 type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; attachment_url?:string|null; created_at:string; mine:boolean; deleted_at?:string|null; pending?:boolean };
 const sortInboxChats=(items:Chat[])=>items.slice().sort((a,b)=>(Number(!!b.isOfficial)-Number(!!a.isOfficial))||((Number(b.lastAt)||0)-(Number(a.lastAt)||0)));
 const AUTH_REDIRECT_URL = 'kingchat://auth/callback';
@@ -1127,7 +1127,7 @@ function GuftinApp() {
     const inboxCacheKey='guftin-cache-inbox:'+session.user.id;
     try{
       const cached=await AsyncStorage.getItem(inboxCacheKey);
-      if(cached){const parsed=JSON.parse(cached);if(Array.isArray(parsed)){const safeCached=(parsed as Chat[]).filter(chat=>chat.kind!=='direct'||chat.hasConversationActivity===true||chat.hasCallActivity===true||(typeof chat.last==='string'&&chat.last!=='No messages yet'));setChats(sortInboxChats(safeCached));setLoading(false);}}
+      if(cached){const parsed=JSON.parse(cached);if(Array.isArray(parsed)){const safeCached=(parsed as Chat[]).filter(chat=>chat.kind!=='direct'||chat.hasConversationActivity===true||chat.hasCallActivity===true||chat.hasPendingActivity===true);setChats(sortInboxChats(safeCached));setLoading(false);}}
     }catch{ /* Ignore a damaged local inbox cache and try the server. */ }
     try{
       const {data:memberships,error}=await supabase.from('kc_conversation_members')
@@ -1136,7 +1136,15 @@ function GuftinApp() {
       if(error) throw error;
       const rows=(memberships||[]) as any[];
       const ids=rows.map(r=>r.conversation_id).filter(Boolean);
-      if(ids.length===0){setChats([]);void AsyncStorage.setItem(inboxCacheKey,'[]').catch(()=>{});return;}
+      if(ids.length===0){
+        setChats(prev=>{
+          const pending=prev.filter(chat=>chat.kind==='direct'&&chat.hasPendingActivity===true);
+          const next=sortInboxChats(pending);
+          void AsyncStorage.setItem(inboxCacheKey,JSON.stringify(next)).catch(()=>{});
+          return next;
+        });
+        return;
+      }
       const directConversationIds=rows.filter(r=>r.conversation?.kind==='direct').map(r=>r.conversation_id).filter(Boolean);
       const [memberResult,profileResult,messageResult,hiddenResult,channelResult,callResult]=await Promise.all([
         supabase.from('kc_conversation_members').select('conversation_id,user_id,last_read_at,joined_at').in('conversation_id',ids),
@@ -1204,8 +1212,12 @@ function GuftinApp() {
           hasConversationActivity:!!last&&!!last.sender_id&&last.message_type!=='system',hasCallActivity:callActivityIds.has(row.conversation_id)};
       });
       const mapped:Chat[]=sortInboxChats(mappedRows.filter((chat):chat is Chat=>!!chat&&(chat.kind!=='direct'||chat.hasConversationActivity===true||chat.hasCallActivity===true)));
-      setChats(mapped);
-      void AsyncStorage.setItem(inboxCacheKey,JSON.stringify(mapped)).catch(()=>{});
+      setChats(prev=>{
+        const pending=prev.filter(chat=>chat.kind==='direct'&&chat.hasPendingActivity===true&&!mapped.some(item=>item.id===chat.id));
+        const next=sortInboxChats([...mapped,...pending]);
+        void AsyncStorage.setItem(inboxCacheKey,JSON.stringify(next)).catch(()=>{});
+        return next;
+      });
     }catch(e:any){
       if(!isConnectivityFailure(e))Alert.alert('Inbox could not load',e?.message||'Please try again.');
     }finally{setLoading(false);}
@@ -2029,7 +2041,7 @@ function GuftinApp() {
   loadMessagesRef.current=loadMessages;
 
   useEffect(()=>{
-    if(session&&active)void loadMessages(active.id);
+    if(session&&active&&!active.pendingContactId)void loadMessages(active.id);
   },[session?.user?.id,deviceIdentity?.deviceId,active?.id,loadMessages]);
 
   const refresh=async()=>{
@@ -2044,6 +2056,22 @@ function GuftinApp() {
     // The active-chat effect performs the single initial load; do not fetch twice.
     void supabase.from('kc_conversation_members').update({hidden_at:null})
       .eq('conversation_id',chat.id).eq('user_id',session.user.id);
+  };
+
+  const ensureActiveDirectConversation=async(chat:Chat):Promise<Chat>=>{
+    if(!chat.pendingContactId)return chat;
+    if(!session?.user?.id)throw new Error('Sign in required to start this conversation.');
+    const {data,error}=await supabase.rpc('kc_start_direct_conversation',{p_contact_id:chat.pendingContactId});
+    if(error)throw error;
+    const conversationId=typeof data==='string'?data:Array.isArray(data)?data[0]:data?.conversation_id;
+    if(typeof conversationId!=='string'||!conversationId)throw new Error('Guftin could not create the conversation. Please try again.');
+    const ready:Chat={
+      ...chat,id:conversationId,pendingContactId:undefined,
+      last:'No messages yet',time:'',lastAt:Date.now(),
+      hasConversationActivity:false,hasCallActivity:false,hasPendingActivity:false
+    };
+    setActive(ready);
+    return ready;
   };
 
   const openChannelChat=(channel:any)=>{
@@ -2202,7 +2230,7 @@ function GuftinApp() {
     }
   },[pendingNotificationConversation,chats]);
 
-  const queueOfflineTextMessage=async(conversationId:string,text:string)=>{
+  const queueOfflineTextMessage=async(conversationId:string,text:string,chatForInbox?:Chat)=>{
     if(!session)return;
     if(clearingConversationIds.current.has(conversationId))throw new Error('This chat is being cleared. Please try again in a moment.');
     const id=ExpoCrypto.randomUUID();
@@ -2218,9 +2246,13 @@ function GuftinApp() {
     const optimistic:Message={id:localId,conversation_id:conversationId,sender_id:session.user.id,body:text,message_type:'text',created_at:createdAt,mine:true,pending:true};
     setMessages(prev=>({...prev,[conversationId]:[...(prev[conversationId]||[]).filter(item=>item.id!==localId),optimistic]}));
     setChats(prev=>{
-      const next=prev.map(chat=>chat.id===conversationId?{...chat,last:text,time:timeLabel(createdAt),lastAt:Date.now()}:chat);
-      void AsyncStorage.setItem('guftin-cache-inbox:'+session.user.id,JSON.stringify(next)).catch(()=>{});
-      return next;
+      const exists=prev.some(chat=>chat.id===conversationId);
+      const next=exists
+        ?prev.map(chat=>chat.id===conversationId?{...chat,last:text,time:timeLabel(createdAt),lastAt:Date.now(),hasPendingActivity:true}:chat)
+        :chatForInbox?[{...chatForInbox,last:text,time:timeLabel(createdAt),lastAt:Date.now(),hasPendingActivity:true},...prev]:prev;
+      const sorted=sortInboxChats(next);
+      void AsyncStorage.setItem('guftin-cache-inbox:'+session.user.id,JSON.stringify(sorted)).catch(()=>{});
+      return sorted;
     });
     void AsyncStorage.setItem('guftin-cache-messages:'+session.user.id+':'+conversationId,
       JSON.stringify([...(messages[conversationId]||[]).filter(item=>item.id!==localId),optimistic])).catch(()=>{});
@@ -2248,12 +2280,12 @@ function GuftinApp() {
     }
     // Text can be stored locally before the encryption roster is online.
     // The background sender waits for the device key and network before delivery.
-    const conversationId=active.id;
     setSending(true);
     try{
+      const chatToSend=await ensureActiveDirectConversation(active);
       // Save locally first. The composer clears as soon as the message is safely queued;
       // server encryption, upload, and push delivery happen in the background.
-      await queueOfflineTextMessage(conversationId,body);
+      await queueOfflineTextMessage(chatToSend.id,body,chatToSend);
       setSending(false);
       void flushPendingMessagesRef.current?.();
     }catch(error:any){
@@ -2502,8 +2534,10 @@ function GuftinApp() {
 
   const uploadVoiceMessage=async(uri:string)=>{
     if(!active||!session||!deviceIdentity||e2eeStatus!=='ready')throw new Error('Secure chat is not ready.');
+    const chatToSend=await ensureActiveDirectConversation(active);
+    const conversationId=chatToSend.id;
     const file=new File(uri);if(file.size>MAX_MEDIA_BYTES)throw new Error('This file is larger than the current 45 MB cloud-storage limit.');
-    const {data:members,error:membersError}=await supabase.from('kc_conversation_members').select('user_id').eq('conversation_id',active.id);
+    const {data:members,error:membersError}=await supabase.from('kc_conversation_members').select('user_id').eq('conversation_id',conversationId);
     if(membersError)throw membersError;
     const memberIds=[...new Set((members||[]).map((row:any)=>row.user_id))] as string[];
     const {data:devices,error:devicesError}=await supabase.from('kc_e2ee_devices').select('id,user_id,public_key').in('user_id',memberIds).is('revoked_at',null);
@@ -2512,14 +2546,14 @@ function GuftinApp() {
     if(memberIds.some(id=>!registeredUsers.has(id)))throw new Error('All chat members must open the latest Guftin build first.');
     const plain=new Uint8Array(await file.arrayBuffer());
     const encrypted=encryptMediaForDevices(plain,devices||[],deviceIdentity,'audio/mp4','voice-message.m4a');plain.fill(0);
-    const objectPath=session.user.id+'/'+active.id+'/'+Date.now()+'_'+ExpoCrypto.randomUUID()+'.enc';
+    const objectPath=session.user.id+'/'+conversationId+'/'+Date.now()+'_'+ExpoCrypto.randomUUID()+'.enc';
     const {error:uploadError}=await supabase.storage.from('chat-media').upload(objectPath,encrypted.ciphertext,{contentType:'application/octet-stream',upsert:false});
     if(uploadError)throw uploadError;
-    const {data,error}=await supabase.from('kc_messages').insert({conversation_id:active.id,sender_id:session.user.id,body:encrypted.body,message_type:'audio',attachment_url:objectPath}).select('id,conversation_id,sender_id,message_type,attachment_url,created_at').single();
+    const {data,error}=await supabase.from('kc_messages').insert({conversation_id:conversationId,sender_id:session.user.id,body:encrypted.body,message_type:'audio',attachment_url:objectPath}).select('id,conversation_id,sender_id,message_type,attachment_url,created_at').single();
     if(error){await supabase.storage.from('chat-media').remove([objectPath]);throw error;}
     void dispatchPush('message',data.id);
     const item=await resolveMessage({...data,body:encrypted.body});
-    setMessages(prev=>({...prev,[active.id]:[...(prev[active.id]||[]),item]}));void loadInbox();
+    setMessages(prev=>({...prev,[conversationId]:[...(prev[conversationId]||[]),item]}));void loadInbox();
   };
 
   const startVoiceRecording=async()=>{
@@ -2581,7 +2615,8 @@ function GuftinApp() {
         Alert.alert('Unsupported format','Please choose a JPG, PNG, WEBP image or MP4 video.');
         return;
       }
-      const conversationId=active.id;
+      const chatToSend=await ensureActiveDirectConversation(active);
+      const conversationId=chatToSend.id;
       const id=ExpoCrypto.randomUUID();
       const localId='pending:'+id;
       const createdAt=new Date().toISOString();
@@ -2592,14 +2627,17 @@ function GuftinApp() {
       };
       // Paint the media bubble immediately; encrypting and uploading are background work.
       setMessages(prev=>({...prev,[conversationId]:[...(prev[conversationId]||[]),optimistic]}));
-      setChats(prev=>{
-        const next=prev.map(chat=>chat.id===conversationId?{...chat,last:messageType==='video'?'Video':'Photo',time:timeLabel(createdAt),lastAt:Date.now()}:chat);
-        void AsyncStorage.setItem('guftin-cache-inbox:'+session.user.id,JSON.stringify(next)).catch(()=>{});
-        return next;
-      });
       setMediaPreparing(true);
       try{
         await queueOfflineMedia(conversationId,asset,messageType,contentType,id,localId);
+        setChats(prev=>{
+          const exists=prev.some(chat=>chat.id===conversationId);
+          const inboxChat={...chatToSend,last:messageType==='video'?'Video':'Photo',time:timeLabel(createdAt),lastAt:Date.now(),hasPendingActivity:true};
+          const next=exists?prev.map(chat=>chat.id===conversationId?inboxChat:chat):[inboxChat,...prev];
+          const sorted=sortInboxChats(next);
+          void AsyncStorage.setItem('guftin-cache-inbox:'+session.user.id,JSON.stringify(sorted)).catch(()=>{});
+          return sorted;
+        });
         setMediaPreparing(false);
         void flushPendingMediaRef.current?.();
       }catch(queueError:any){
@@ -2660,7 +2698,8 @@ function GuftinApp() {
         Alert.alert('Document too large','Encrypted documents can be up to 45 MB with the current cloud-storage limit.');
         return;
       }
-      const conversationId=active.id;
+      const chatToSend=await ensureActiveDirectConversation(active);
+      const conversationId=chatToSend.id;
       const id=ExpoCrypto.randomUUID();
       const localId='pending:'+id;
       const createdAt=new Date().toISOString();
@@ -2670,16 +2709,17 @@ function GuftinApp() {
         created_at:createdAt,mine:true,pending:true
       };
       setMessages(prev=>({...prev,[conversationId]:[...(prev[conversationId]||[]),optimistic]}));
-      setChats(prev=>{
-        const next=prev.map(chat=>chat.id===conversationId
-          ?{...chat,last:'Document: '+fileName,time:timeLabel(createdAt),lastAt:Date.now()}
-          :chat);
-        void AsyncStorage.setItem('guftin-cache-inbox:'+session.user.id,JSON.stringify(next)).catch(()=>{});
-        return next;
-      });
       setMediaPreparing(true);
       try{
         await queueOfflineMedia(conversationId,{...asset,fileName},'file',contentType,id,localId);
+        setChats(prev=>{
+          const exists=prev.some(chat=>chat.id===conversationId);
+          const inboxChat={...chatToSend,last:'Document: '+fileName,time:timeLabel(createdAt),lastAt:Date.now(),hasPendingActivity:true};
+          const next=exists?prev.map(chat=>chat.id===conversationId?inboxChat:chat):[inboxChat,...prev];
+          const sorted=sortInboxChats(next);
+          void AsyncStorage.setItem('guftin-cache-inbox:'+session.user.id,JSON.stringify(sorted)).catch(()=>{});
+          return sorted;
+        });
         setMediaPreparing(false);
         void flushPendingMediaRef.current?.();
       }catch(queueError:any){
@@ -2740,20 +2780,21 @@ function GuftinApp() {
       Alert.alert('Secure calling not ready','Open Guftin on both phones and wait until secure chat is ready before starting a call.');
       return;
     }
-    if(!['direct','group'].includes(active.kind)){
+    if(!['direct','group'].includes(callChat.kind)){
       Alert.alert('Calling unavailable','Calls are available in direct chats and groups.');
       return;
     }
     setCallBusy(true);
     try{
+      const callChat=await ensureActiveDirectConversation(active);
       const {data:members,error:memberError}=await supabase.from('kc_conversation_members')
-        .select('user_id').eq('conversation_id',active.id);
+        .select('user_id').eq('conversation_id',callChat.id);
       if(memberError)throw memberError;
       const memberIds=[...new Set((members||[]).map((row:any)=>row.user_id))] as string[];
       if(!memberIds.includes(session.user.id))throw new Error('You are no longer a member of this conversation.');
-      if(active.kind==='direct'&&(memberIds.length!==2||memberIds.filter(id=>id!==session.user.id).length!==1))
+      if(callChat.kind==='direct'&&(memberIds.length!==2||memberIds.filter(id=>id!==session.user.id).length!==1))
         throw new Error('This direct call needs exactly one other member.');
-      if(active.kind==='group'&&(memberIds.length<2||memberIds.length>20))
+      if(callChat.kind==='group'&&(memberIds.length<2||memberIds.length>20))
         throw new Error('Group calls need 2–20 group members, including you.');
       const {data:devices,error:devicesError}=await supabase.from('kc_e2ee_devices')
         .select('id,user_id,public_key').in('user_id',memberIds).is('revoked_at',null);
@@ -2771,20 +2812,20 @@ function GuftinApp() {
         callKey.fill(0);
       }
       let call:any;
-      if(active.kind==='group'){
+      if(callChat.kind==='group'){
         const {data,error}=await supabase.rpc('kc_create_group_call',{
-          p_conversation_id:active.id,
+          p_conversation_id:callChat.id,
           p_call_type:callType,
           p_e2ee_key_envelopes:e2eeKeyEnvelopes
         });
         if(error)throw error;
         const callId=typeof data==='string'?data:(Array.isArray(data)?data[0]:data);
         if(!callId)throw new Error('The group call was created but the call ID was not returned.');
-        call={id:callId,conversation_id:active.id,caller_id:session.user.id,call_type:callType,status:'ringing',call_scope:'group'};
+        call={id:callId,conversation_id:callChat.id,caller_id:session.user.id,call_type:callType,status:'ringing',call_scope:'group'};
       }else{
         const peer=memberIds.find(id=>id!==session.user.id);
         const {data,error}=await supabase.from('kc_call_logs').insert({
-          conversation_id:active.id,
+          conversation_id:callChat.id,
           caller_id:session.user.id,
           callee_id:peer,
           call_type:callType,
@@ -2799,8 +2840,9 @@ function GuftinApp() {
       // RNCallKeep.startCall here also launches the generic Android Telecom
       // outgoing flow and can cover the app's custom call screen.
       setIncomingCall(null);
-      setOutgoingCall({...call,contact_name:active.name,contact_avatar:active.avatar,contact_avatar_url:active.avatarUrl});
+      setOutgoingCall({...call,contact_name:callChat.name,contact_avatar:callChat.avatar,contact_avatar_url:callChat.avatarUrl});
       void dispatchPush('call',call.id);
+      void loadInbox();
     }catch(e:any){
       Alert.alert('Call could not start',e?.message||'Please try again.');
     }finally{
@@ -3089,15 +3131,16 @@ function GuftinApp() {
     setAdding(false);
     if(error){Alert.alert('Could not find contact',error.message);return;}
     const row=Array.isArray(data)?data[0]:data;
-    if(!row?.conversation_id){Alert.alert('Contact not found','No Guftin account uses this username yet.');return;}
+    if(!row?.contact_id){Alert.alert('Contact not found','No registered Guftin account uses this username yet.');return;}
     setAddOpen(false);setContactUsername('');
-    await supabase.from('kc_conversation_members').update({hidden_at:null})
-      .eq('conversation_id',row.conversation_id).eq('user_id',session.user.id);
     const name=row.display_name||row.username||'Guftin member';
-    const chat:Chat={id:row.conversation_id,name,avatar:initials(name),color:colorFor(name),last:'No messages yet',time:'',unread:0,online:false,kind:'direct',lastAt:Date.now()};
-    setChats(prev=>[chat,...prev.filter(c=>c.id!==chat.id)]);
+    const chat:Chat={
+      id:'pending:'+row.contact_id,pendingContactId:row.contact_id,
+      name,avatar:initials(name),color:colorFor(name),
+      last:'Start a conversation',time:'',unread:0,online:false,kind:'direct',lastAt:0
+    };
+    setPeerLastReadAt(null);
     setActive(chat);
-    await loadMessages(chat.id);
   };
 
   const saveProfile=async()=>{
