@@ -42,6 +42,7 @@ let guftinCallAudioStartPromise: Promise<void> | null = null;
 let guftinCallAudioStopPromise: Promise<void> | null = null;
 let guftinCallAudioSessionActive = false;
 let activeGuftinCallRoom: { callId: string; disconnect: () => Promise<void>; disconnected: boolean } | null = null;
+let activeGuftinCallRecordingController: { callId: string; stopAndSave: () => Promise<void> } | null = null;
 
 const startGuftinCallAudioSession = async (): Promise<void> => {
   if (guftinCallAudioStopPromise) await guftinCallAudioStopPromise;
@@ -362,221 +363,379 @@ function Heading({children}:any) { return <Text style={{fontSize:25,fontWeight:'
 
 function CallControlButton({label,onPress,active=false,danger=false,disabled=false}:any) {
   return <Btn disabled={disabled} onPress={onPress} style={{
-    minWidth:60,minHeight:62,paddingHorizontal:8,paddingVertical:9,
+    flexGrow:1,flexBasis:'22%',minWidth:70,minHeight:54,paddingHorizontal:8,paddingVertical:9,
     alignItems:'center',justifyContent:'center',borderRadius:18,
-    backgroundColor:danger?'#c43e48':active?'#f1c65b':'#244b45',
-    borderWidth:1,borderColor:danger?'#e45d66':active?'#f4d782':'#47766c',
-    opacity:disabled ? 0.45 : 1
+    backgroundColor:danger?'#c43e48':active?'#e8c75c':'#244b45',
+    borderWidth:1,borderColor:danger?'#f17a82':active?'#f4d782':'#47766c',
+    opacity:disabled?0.45:1
   }}>
-    <Text style={{color:danger?'#fff':active?'#23362f':'#fff',fontSize:11,fontWeight:'900',textAlign:'center'}}>{label}</Text>
+    <Text numberOfLines={2} style={{color:danger?'#fff':active?'#23362f':'#fff',fontSize:11,fontWeight:'900',textAlign:'center'}}>{label}</Text>
   </Btn>;
 }
 
-function CallRoomScreen({callId,callType,onHangUp,callScope}:any) {
+function CallRoomScreen({callId,callType,onHangUp,callScope,sessionUserId}:any) {
   const tracks=useTracks([Track.Source.Camera]);
   const participants=useParticipants();
   const {localParticipant,isMicrophoneEnabled,isCameraEnabled}=useLocalParticipant();
+  const room=useRoomContext();
+  const insets=useSafeAreaInsets();
   const [speakerOn,setSpeakerOn]=useState(false);
   const [controlBusy,setControlBusy]=useState(false);
-  const room=useRoomContext();
-  const hangUpInProgress=useRef(false);
+  const [recordingBusy,setRecordingBusy]=useState(false);
+  const [recording,setRecording]=useState<any>(null);
+  const [consentPrompt,setConsentPrompt]=useState<any>(null);
+  const roomHangUpInProgress=useRef(false);
+  const recordingPollInProgress=useRef(false);
+  const e2eeDisabledForRecording=useRef(false);
+  const readyRecordingId=useRef('');
+  const savedRecordingIds=useRef(new Set<string>());
+  const recordingRef=useRef<any>(null);
 
   useEffect(()=>{
     const controller={callId,disconnect:()=>room.disconnect(),disconnected:false};
     activeGuftinCallRoom=controller;
-    return ()=>{
-      if(activeGuftinCallRoom===controller)activeGuftinCallRoom=null;
-    };
+    return ()=>{if(activeGuftinCallRoom===controller)activeGuftinCallRoom=null;};
   },[callId,room]);
 
-  const handleHangUp=async()=>{
-    if(hangUpInProgress.current)return;
-    hangUpInProgress.current=true;
+  const setCallRecording=(value:any)=>{
+    const next=value?.recording||null;
+    recordingRef.current=next;
+    setRecording(next);
+  };
+  const invokeRecording=useCallback(async(action:string,extra:any={})=>{
+    const {data,error}=await supabase.functions.invoke('guftin-call-recording',{body:{action,call_id:callId,...extra}});
+    if(error)throw error;
+    if(data?.error)throw new Error(data.error);
+    return data;
+  },[callId]);
+
+  const saveRecordingToPhone=useCallback(async(record:any)=>{
+    if(!record?.storage_path||savedRecordingIds.current.has(record.id))return;
+    savedRecordingIds.current.add(record.id);
     try{
-      // Disconnect the room first. The shared audio cleanup then releases
-      // communication focus and restores normal Android media playback mode.
-      await room.disconnect();
+      const {data,error}=await supabase.storage.from('call-recordings').download(record.storage_path);
+      if(error||!data)throw error||new Error('The recording file was not returned by secure storage.');
+      const bytes=new Uint8Array(await data.arrayBuffer());
+      const stamp=new Date().toISOString().replace(/[:.]/g,'-');
+      const fileName='Guftin-'+(record.media_type==='video'?'Video':'Voice')+'-Call-'+stamp+'.mp4';
+      const localFile=new File(Paths.document,fileName);
+      if(localFile.exists)localFile.delete();
+      localFile.create();
+      await localFile.write(bytes);
+      bytes.fill(0);
+      await AsyncStorage.setItem('guftin-call-recording:'+sessionUserId+':'+record.id,localFile.uri);
+      let savedToGallery=false;
+      try{
+        let permission=await MediaLibrary.getPermissionsAsync(false,['video']);
+        if(!permission.granted)permission=await MediaLibrary.requestPermissionsAsync(false,['video']);
+        if(permission.granted){await MediaLibrary.createAssetAsync(localFile.uri);savedToGallery=true;}
+      }catch(mediaError:any){console.warn('Guftin recording gallery copy failed:',mediaError?.message||mediaError);}
+      Alert.alert('Recording saved',savedToGallery
+        ?'The call recording was saved to your phone gallery and Guftin storage.'
+        :'The call recording was saved in Guftin storage on this phone. Allow video-library access to copy it to Gallery.');
     }catch(error:any){
-      console.warn('Guftin room disconnect:',error?.message||error);
+      savedRecordingIds.current.delete(record.id);
+      Alert.alert('Recording download failed',error?.message||'The recording remains in secure Guftin storage. Try again when internet is available.');
     }
-    await stopGuftinCallAudioSession();
-    await onHangUp?.();
+  },[sessionUserId]);
+
+  const setRecordingEncryption=useCallback(async(enabled:boolean)=>{
+    const roomApi=room as any;
+    if(typeof roomApi.setE2EEEnabled!=='function')throw new Error('This LiveKit build cannot change media encryption safely for recording.');
+    await roomApi.setE2EEEnabled(enabled);
+    e2eeDisabledForRecording.current=!enabled;
+  },[room]);
+
+  const refreshRecording=useCallback(async()=>{
+    if(recordingPollInProgress.current)return;
+    recordingPollInProgress.current=true;
+    try{
+      const data=await invokeRecording('status');
+      const next=data?.recording||null;
+      if(!next){setCallRecording(null);return;}
+      recordingRef.current=next;
+      setRecording(next);
+      if(next.status==='awaiting_consent'&&data.own_decision==='pending')setConsentPrompt(next);
+      else if(next.status!=='awaiting_consent')setConsentPrompt(null);
+
+      if(next.status==='switching_to_recording'&&data.own_decision==='accepted'&&readyRecordingId.current!==next.id){
+        readyRecordingId.current=next.id;
+        try{
+          await setRecordingEncryption(false);
+          const readyData=await invokeRecording('ready',{recording_id:next.id});
+          setCallRecording(readyData);
+        }catch(error:any){
+          readyRecordingId.current='';
+          try{await setRecordingEncryption(true);}catch{}
+          Alert.alert('Recording could not start',error?.message||'Encryption was not changed. The call remains private.');
+          try{await invokeRecording('stop',{recording_id:next.id});}catch{}
+        }
+      }
+      if(['complete','declined','cancelled','failed'].includes(next.status)){
+        if(e2eeDisabledForRecording.current){
+          try{await setRecordingEncryption(true);}
+          catch(error:any){console.warn('Could not restore call encryption:',error?.message||error);}
+        }
+        setConsentPrompt(null);
+        if(next.status==='complete')await saveRecordingToPhone(next);
+      }
+    }catch(error:any){console.warn('Guftin call recording status:',error?.message||error);}
+    finally{recordingPollInProgress.current=false;}
+  },[invokeRecording,setRecordingEncryption,saveRecordingToPhone]);
+
+  const stopAndSaveRecording=useCallback(async()=>{
+    const current=recordingRef.current;
+    if(!current)return;
+    if(['awaiting_consent','switching_to_recording','starting','recording'].includes(current.status)){
+      const stopped=await invokeRecording('stop',{recording_id:current.id});
+      setCallRecording(stopped);
+    }
+    if(e2eeDisabledForRecording.current){
+      try{await setRecordingEncryption(true);}
+      catch(error:any){console.warn('Could not restore E2EE before call exit:',error?.message||error);}
+    }
+    for(let attempt=0;attempt<18;attempt++){
+      const data=await invokeRecording('status',{recording_id:current.id});
+      const latest=data?.recording;
+      if(latest){
+        recordingRef.current=latest;setRecording(latest);
+        if(latest.status==='complete'){await saveRecordingToPhone(latest);break;}
+        if(['failed','cancelled','declined'].includes(latest.status))break;
+      }
+      await new Promise<void>(resolve=>setTimeout(resolve,1000));
+    }
+  },[invokeRecording,setRecordingEncryption,saveRecordingToPhone]);
+
+  useEffect(()=>{
+    const controller={callId,stopAndSave:stopAndSaveRecording};
+    activeGuftinCallRecordingController=controller;
+    return ()=>{if(activeGuftinCallRecordingController===controller)activeGuftinCallRecordingController=null;};
+  },[callId,stopAndSaveRecording]);
+
+  useEffect(()=>{
+    void refreshRecording();
+    const timer=setInterval(()=>void refreshRecording(),1800);
+    return ()=>clearInterval(timer);
+  },[refreshRecording]);
+
+  const requestRecording=()=>{
+    Alert.alert('Request call recording?',
+      'Everyone in this call must agree. If all participants accept, end-to-end encryption will be temporarily turned off while LiveKit processes the recording. A red recording notice remains visible, and any participant can stop recording.',
+      [{text:'Cancel',style:'cancel'},{text:'Request consent',onPress:()=>void (async()=>{
+        setRecordingBusy(true);
+        try{const data=await invokeRecording('request');setCallRecording(data);await refreshRecording();}
+        catch(error:any){Alert.alert('Recording request failed',error?.message||'Please try again.');}
+        finally{setRecordingBusy(false);}
+      })()}]);
+  };
+  const answerRecordingConsent=async(decision:'accepted'|'declined')=>{
+    if(!consentPrompt||recordingBusy)return;
+    setRecordingBusy(true);
+    try{
+      const data=await invokeRecording('consent',{recording_id:consentPrompt.id,decision});
+      setCallRecording(data);setConsentPrompt(null);
+      if(decision==='declined')Alert.alert('Recording declined','No call recording will be created. End-to-end encryption remains on.');
+    }catch(error:any){Alert.alert('Could not send your decision',error?.message||'Please try again.');}
+    finally{setRecordingBusy(false);}
+  };
+  const openCallMenu=()=>{
+    const state=recordingRef.current?.status;
+    const activeRecording=!!state&&['awaiting_consent','switching_to_recording','starting','recording','stopping'].includes(state);
+    Alert.alert('Call options','Recording always requires consent from every participant.',[
+      ...(!activeRecording?[{text:'Start call recording',onPress:requestRecording}]:[]),
+      ...(activeRecording?[{text:state==='recording'?'Stop recording':'Cancel recording request',style:'destructive' as const,onPress:()=>void (async()=>{
+        setRecordingBusy(true);
+        try{await stopAndSaveRecording();await refreshRecording();}
+        catch(error:any){Alert.alert('Could not stop recording',error?.message||'Please try again.');}
+        finally{setRecordingBusy(false);}
+      })()}]:[]),
+      {text:'Close',style:'cancel'}
+    ]);
   };
 
+  const handleHangUp=async()=>{
+    if(roomHangUpInProgress.current)return;
+    roomHangUpInProgress.current=true;
+    await onHangUp?.();
+  };
   const toggleMicrophone=async()=>{
-    if(controlBusy)return;
-    setControlBusy(true);
+    if(controlBusy)return;setControlBusy(true);
     try{await localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled);}
-    catch(error:any){Alert.alert('Microphone control failed',error?.message||'Please check microphone permission.');}
+    catch(error:any){Alert.alert('Microphone control failed',error?.message||'Check microphone permission.');}
     finally{setControlBusy(false);}
   };
   const toggleCamera=async()=>{
-    if(controlBusy)return;
-    setControlBusy(true);
+    if(controlBusy)return;setControlBusy(true);
     try{await localParticipant.setCameraEnabled(!isCameraEnabled);}
-    catch(error:any){Alert.alert('Camera control failed',error?.message||'Please check camera permission.');}
+    catch(error:any){Alert.alert('Camera control failed',error?.message||'Check camera permission.');}
     finally{setControlBusy(false);}
   };
   const toggleSpeaker=async()=>{
-    if(controlBusy)return;
-    setControlBusy(true);
+    if(controlBusy)return;setControlBusy(true);
     try{
       const outputs=await AudioSession.getAudioOutputs();
-      const target=speakerOn
-        ?(outputs.includes('earpiece')?'earpiece':outputs.includes('default')?'default':null)
+      const target=speakerOn?(outputs.includes('earpiece')?'earpiece':outputs.includes('default')?'default':null)
         :(outputs.includes('speaker')?'speaker':outputs.includes('force_speaker')?'force_speaker':null);
-      if(!target){
-        Alert.alert('Audio output unavailable','Your phone has not reported a compatible speaker/earpiece route.');
-        return;
-      }
-      await AudioSession.selectAudioOutput(target);
-      setSpeakerOn(!speakerOn);
-    }catch(error:any){Alert.alert('Speaker control failed',error?.message||'Could not change the audio output.');}
+      if(!target){Alert.alert('Audio output unavailable','No compatible speaker or earpiece route was reported.');return;}
+      await AudioSession.selectAudioOutput(target);setSpeakerOn(!speakerOn);
+    }catch(error:any){Alert.alert('Speaker control failed',error?.message||'Could not change audio output.');}
     finally{setControlBusy(false);}
   };
   const flipCamera=async()=>{
-    if(!isCameraEnabled){
-      Alert.alert('Camera is off','Turn the camera on before switching between front and rear cameras.');
-      return;
-    }
+    if(!isCameraEnabled){Alert.alert('Camera is off','Turn on the camera before switching lenses.');return;}
     try{
       const publication=localParticipant.getTrackPublication(Track.Source.Camera);
       const cameraTrack:any=publication?.track;
       const mediaTrack:any=cameraTrack?.mediaStreamTrack;
-      if(typeof mediaTrack?._switchCamera==='function'){
-        await mediaTrack._switchCamera();
-      }else if(typeof cameraTrack?.switchCamera==='function'){
-        await cameraTrack.switchCamera();
-      }else{
-        Alert.alert('Camera switch unavailable','This device camera does not expose a supported camera-switch method.');
-      }
+      if(typeof mediaTrack?._switchCamera==='function')await mediaTrack._switchCamera();
+      else if(typeof cameraTrack?.switchCamera==='function')await cameraTrack.switchCamera();
+      else Alert.alert('Camera switch unavailable','This device does not expose a camera-switch method.');
     }catch(error:any){Alert.alert('Could not switch camera',error?.message||'Please try again.');}
   };
 
-  return <SafeAreaView style={{flex:1,backgroundColor:'#102b27'}}>
-    <StatusBar barStyle="light-content"/>
-    <View style={{flex:1,paddingHorizontal:14,paddingTop:15,paddingBottom:8}}>
-      <Text style={{fontSize:23,fontWeight:'900',color:'#fff',textAlign:'center'}}>
-        {callType==='video'?(callScope==='group'?'Group video call':'Video call'):(callScope==='group'?'Group voice call':'Voice call')}
-      </Text>
-      <Text style={{fontSize:12,color:'#b8d2c8',textAlign:'center',marginTop:7}}>
-        {participants.length} participant{participants.length===1?'':'s'} connected
-      </Text>
-      {callType==='video'?<FlatList
-        data={tracks}
-        keyExtractor={(item:any)=>item.publication?.trackSid||item.participant.identity}
-        numColumns={2}
-        columnWrapperStyle={{gap:9}}
-        contentContainerStyle={{gap:9,paddingTop:18,paddingBottom:10}}
-        renderItem={({item}:any)=>isTrackReference(item)
-          ?<VideoTrack trackRef={item} style={{width:'100%',height:230,borderRadius:16,backgroundColor:'#1b3832',flex:1}}/>
-          :<View style={{width:'48%',height:150,alignItems:'center',justifyContent:'center',backgroundColor:'#1b3832',borderRadius:16}}>
-            <Text style={{color:'#fff'}}>Camera is off</Text>
-          </View>}
-        ListEmptyComponent={<View style={{padding:35,alignItems:'center'}}><Text style={{color:'#fff'}}>Waiting for video participants…</Text></View>}
-      />:<View style={{flex:1,alignItems:'center',justifyContent:'center',padding:25}}>
-        <Text style={{fontSize:64,color:'#fff'}}>☎</Text>
-        <Text style={{color:'#d8e8e1',marginTop:14,fontSize:15,fontWeight:'800'}}>Secure audio connection</Text>
-        <Text style={{color:'#a9c8ba',marginTop:6,fontSize:12}}>You can mute your microphone or change speaker output below.</Text>
-      </View>}
-    </View>
-    <View style={{paddingHorizontal:14,paddingTop:10,paddingBottom:18,backgroundColor:'#0c211e',borderTopWidth:1,borderColor:'#2b5348'}}>
-      <View style={{flexDirection:'row',justifyContent:'space-around',alignItems:'center',gap:7}}>
-        <CallControlButton label={isMicrophoneEnabled?'Mute mic':'Unmute mic'} active={!isMicrophoneEnabled} disabled={controlBusy} onPress={()=>void toggleMicrophone()}/>
-        <CallControlButton label={speakerOn?'Speaker on':'Speaker'} active={speakerOn} disabled={controlBusy} onPress={()=>void toggleSpeaker()}/>
-        {callType==='video'?<>
-          <CallControlButton label={isCameraEnabled?'Camera off':'Camera on'} active={!isCameraEnabled} disabled={controlBusy} onPress={()=>void toggleCamera()}/>
-          <CallControlButton label="Flip camera" disabled={controlBusy||!isCameraEnabled} onPress={()=>void flipCamera()}/>
-        </>:null}
-        <CallControlButton label="End call" danger onPress={()=>void handleHangUp()}/>
+  const recordingActive=!!recording&&['starting','recording','stopping','switching_to_recording'].includes(recording.status);
+  const recordingLabel=recording?.status==='recording'?'RECORDING · ENCRYPTION TEMPORARILY OFF'
+    :recording?.status==='awaiting_consent'?'WAITING FOR EVERYONE TO AGREE'
+    :recording?.status==='switching_to_recording'?'PREPARING CONSENTED RECORDING':'SAVING RECORDING…';
+
+  return <View style={{flex:1,backgroundColor:'#081d1b'}}>
+    <SafeAreaView edges={['top','left','right']} style={{flex:1,backgroundColor:'#102b27'}}>
+      <StatusBar barStyle="light-content" backgroundColor="#102b27"/>
+      <View style={{height:62,paddingHorizontal:15,flexDirection:'row',alignItems:'center',justifyContent:'space-between',borderBottomWidth:1,borderColor:'#2c5148'}}>
+        <View style={{flex:1}}>
+          <Text style={{fontSize:19,fontWeight:'900',color:'#fff',letterSpacing:-0.3}}>
+            {callType==='video'?(callScope==='group'?'Group video call':'Video call'):(callScope==='group'?'Group voice call':'Voice call')}
+          </Text>
+          <Text style={{fontSize:11,color:'#b8d2c8',marginTop:3}}>{participants.length} participant{participants.length===1?'':'s'} connected</Text>
+        </View>
+        <Btn onPress={openCallMenu} style={{width:46,height:46,borderRadius:15,backgroundColor:'#1b4038',alignItems:'center',justifyContent:'center',borderWidth:1,borderColor:'#47766c'}}>
+          <Text style={{fontSize:26,fontWeight:'900',color:'#fff'}}>⋮</Text>
+        </Btn>
       </View>
-    </View>
-  </SafeAreaView>;
+      {recordingActive?<View style={{marginHorizontal:14,marginTop:10,paddingHorizontal:12,paddingVertical:9,borderRadius:12,backgroundColor:'#7a242b',borderWidth:1,borderColor:'#ec6a72',flexDirection:'row',alignItems:'center',gap:8}}>
+        <View style={{width:8,height:8,borderRadius:4,backgroundColor:'#fff'}}/>
+        <Text style={{fontSize:10,fontWeight:'900',color:'#fff',letterSpacing:0.5,flex:1}}>{recordingLabel}</Text>
+      </View>:null}
+      <View style={{flex:1,minHeight:0,paddingHorizontal:12,paddingTop:10}}>
+        {callType==='video'?<FlatList
+          data={tracks} keyExtractor={(item:any)=>item.publication?.trackSid||item.participant.identity}
+          numColumns={2} columnWrapperStyle={{gap:9}} style={{flex:1}}
+          contentContainerStyle={{gap:9,paddingBottom:12,flexGrow:1}}
+          renderItem={({item}:any)=>isTrackReference(item)
+            ?<View style={{width:'100%',height:190,borderRadius:16,overflow:'hidden',backgroundColor:'#1b3832',borderWidth:1,borderColor:'#47766c'}}>
+              <VideoTrack trackRef={item} style={{width:'100%',height:'100%'}}/>
+              <View style={{position:'absolute',left:8,bottom:8,paddingHorizontal:8,paddingVertical:4,backgroundColor:'#061b18cc',borderRadius:8}}>
+                <Text style={{fontSize:10,color:'#fff',fontWeight:'800'}} numberOfLines={1}>{item.participant?.name||item.participant?.identity||'Participant'}</Text>
+              </View>
+            </View>
+            :<View style={{width:'48%',height:150,alignItems:'center',justifyContent:'center',backgroundColor:'#1b3832',borderRadius:16,borderWidth:1,borderColor:'#47766c'}}><Text style={{color:'#fff'}}>Camera is off</Text></View>}
+          ListEmptyComponent={<View style={{flex:1,minHeight:160,alignItems:'center',justifyContent:'center',padding:26}}>
+            <Text style={{fontSize:40,color:'#d4f1e5'}}>▣</Text>
+            <Text style={{fontSize:13,fontWeight:'800',color:'#fff',marginTop:12}}>Waiting for video participants…</Text>
+          </View>}
+        />:<View style={{flex:1,alignItems:'center',justifyContent:'center',padding:24}}>
+          <View style={{width:154,height:154,borderRadius:77,backgroundColor:'#174438',borderWidth:2,borderColor:'#49b58b',alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:66,color:'#fff'}}>☎</Text></View>
+          <Text style={{color:'#f3fff8',marginTop:18,fontSize:20,fontWeight:'900'}}>Secure voice connection</Text>
+          <Text style={{color:'#a9c8ba',marginTop:7,fontSize:12,textAlign:'center',lineHeight:18}}>Your microphone, speaker and recording controls stay available below.</Text>
+        </View>}
+      </View>
+    </SafeAreaView>
+    <SafeAreaView edges={['bottom']} style={{backgroundColor:'#0c211e',borderTopWidth:1,borderColor:'#2b5348',paddingHorizontal:12,paddingTop:10,paddingBottom:Math.max(insets.bottom,10)+8}}>
+      <View style={{flexDirection:'row',flexWrap:'wrap',gap:8,justifyContent:'space-between'}}>
+        <CallControlButton label={isMicrophoneEnabled?'🎙  Mic on':'🎙  Mic muted'} active={!isMicrophoneEnabled} disabled={controlBusy} onPress={()=>void toggleMicrophone()}/>
+        <CallControlButton label={speakerOn?'🔊  Speaker on':'🔊  Speaker'} active={speakerOn} disabled={controlBusy} onPress={()=>void toggleSpeaker()}/>
+        {callType==='video'?<>
+          <CallControlButton label={isCameraEnabled?'▣  Camera on':'▣  Camera off'} active={!isCameraEnabled} disabled={controlBusy} onPress={()=>void toggleCamera()}/>
+          <CallControlButton label="↻  Flip camera" disabled={controlBusy||!isCameraEnabled} onPress={()=>void flipCamera()}/>
+        </>:null}
+        <CallControlButton label={recordingBusy?'Recording…':'⋮  Call options'} active={recordingActive} disabled={recordingBusy} onPress={openCallMenu}/>
+      </View>
+      <Btn onPress={()=>void handleHangUp()} style={{marginTop:9,minHeight:56,borderRadius:17,backgroundColor:'#d94350',borderWidth:1,borderColor:'#fa7b83',alignItems:'center',justifyContent:'center',elevation:5}}>
+        <Text style={{fontSize:16,color:'#fff',fontWeight:'900'}}>End call</Text>
+      </Btn>
+    </SafeAreaView>
+    <Modal visible={!!consentPrompt} transparent animationType="fade" onRequestClose={()=>{}}>
+      <View style={{flex:1,backgroundColor:'#000b',justifyContent:'center',padding:22}}>
+        <View style={{backgroundColor:'#f6fbf8',borderRadius:24,padding:22,borderWidth:1,borderColor:'#82cfb3'}}>
+          <Text style={{fontSize:22,fontWeight:'900',color:'#143c31'}}>Call recording request</Text>
+          <Text style={{fontSize:13,color:'#36584d',lineHeight:20,marginTop:12}}>
+            Another participant wants to record this {callType==='video'?'video':'voice'} call. If you accept, end-to-end encryption will be temporarily turned off for everyone while LiveKit processes the recording. The recording will be saved on each participant's phone.
+          </Text>
+          <Text style={{fontSize:12,color:'#9a3138',fontWeight:'900',marginTop:12}}>Recording cannot start unless every participant accepts.</Text>
+          <View style={{flexDirection:'row',gap:10,marginTop:22}}>
+            <Btn disabled={recordingBusy} onPress={()=>void answerRecordingConsent('declined')} style={{flex:1,paddingVertical:14,borderRadius:13,backgroundColor:'#fbe7e8',alignItems:'center'}}><Text style={{color:'#a42f39',fontWeight:'900'}}>Decline</Text></Btn>
+            <Btn disabled={recordingBusy} onPress={()=>void answerRecordingConsent('accepted')} style={{flex:1,paddingVertical:14,borderRadius:13,backgroundColor:'#16845f',alignItems:'center'}}>
+              {recordingBusy?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'900'}}>Accept</Text>}
+            </Btn>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  </View>;
 }
+
 function CallLobbyScreen({call,mode,onAccept,onDecline,onCancel,busy}:any) {
-  const incoming = mode === 'incoming';
-  const callType = call?.call_type || call?.callType || 'voice';
-  const ringPulse = useRef(new Animated.Value(0)).current;
+  const incoming=mode==='incoming';
+  const callType=call?.call_type||call?.callType||'voice';
+  const insets=useSafeAreaInsets();
+  const ringPulse=useRef(new Animated.Value(0)).current;
   useEffect(()=>{
     const animation=Animated.loop(Animated.sequence([
       Animated.timing(ringPulse,{toValue:1,duration:1450,useNativeDriver:true}),
       Animated.timing(ringPulse,{toValue:0,duration:0,useNativeDriver:true})
     ]));
-    animation.start();
-    return ()=>animation.stop();
+    animation.start();return ()=>animation.stop();
   },[ringPulse]);
-  const pulseScale=ringPulse.interpolate({inputRange:[0,1],outputRange:[1,1.52]});
+  const pulseScale=ringPulse.interpolate({inputRange:[0,1],outputRange:[1,1.48]});
   const pulseOpacity=ringPulse.interpolate({inputRange:[0,1],outputRange:[0.48,0]});
-  const isVideo = callType === 'video';
-  const isGroup = (call?.call_scope || call?.callScope) === 'group';
-  const displayName = incoming
-    ? (call?.caller_name || 'Guftin contact')
-    : (call?.contact_name || call?.caller_name || 'Guftin contact');
-  const statusLabel = busy
-    ? 'Preparing secure connection…'
-    : incoming
-      ? (isVideo ? 'Incoming video call' : 'Incoming voice call')
-      : (isVideo ? 'Calling by video…' : 'Calling…');
-
-  return <SafeAreaView style={{flex:1,backgroundColor:'#071b18'}}>
+  const isVideo=callType==='video';
+  const isGroup=(call?.call_scope||call?.callScope)==='group';
+  const displayName=incoming?(call?.caller_name||'Guftin contact'):(call?.contact_name||call?.caller_name||'Guftin contact');
+  const statusLabel=busy?'Preparing secure connection…':incoming?(isVideo?'Incoming video call':'Incoming voice call'):(isVideo?'Calling by video…':'Calling…');
+  return <SafeAreaView edges={['top','left','right','bottom']} style={{flex:1,backgroundColor:'#071b18'}}>
     <StatusBar barStyle="light-content" backgroundColor="#071b18"/>
-    <View style={{flex:1,paddingHorizontal:25,paddingTop:24,paddingBottom:26,justifyContent:'space-between'}}>
+    <View style={{flex:1,paddingHorizontal:22,paddingTop:16,paddingBottom:Math.max(insets.bottom,18)+8}}>
       <View style={{alignItems:'center'}}>
         <Text style={{fontSize:18,fontWeight:'900',letterSpacing:4,color:'#f4fff9'}}>GUFTIN</Text>
         <View style={{marginTop:8,paddingHorizontal:13,paddingVertical:6,borderRadius:20,backgroundColor:'#123d32',borderWidth:1,borderColor:'#236451'}}>
           <Text style={{fontSize:9,fontWeight:'900',letterSpacing:2,color:'#9de5c5'}}>PRIVATE {isVideo?'VIDEO':'VOICE'} CALL</Text>
         </View>
       </View>
-
-      <View style={{alignItems:'center',justifyContent:'center',flex:1,paddingVertical:24}}>
-        <View style={{width:220,height:220,alignItems:'center',justifyContent:'center'}}>
-          <Animated.View style={{position:'absolute',width:184,height:184,borderRadius:92,borderWidth:2,borderColor:'#49d7a0',opacity:pulseOpacity,transform:[{scale:pulseScale}]}}/>
-          <View style={{width:174,height:174,borderRadius:87,borderWidth:2,backgroundColor:'#0b2a23',borderColor:'#286a55',alignItems:'center',justifyContent:'center',shadowColor:'#31c48d',shadowOpacity:0.28,shadowRadius:28,elevation:14,overflow:'hidden'}}>
-            {call?.contact_avatar_url||call?.avatar_url
-              ?<Image source={{uri:call.contact_avatar_url||call.avatar_url}} style={{width:160,height:160,borderRadius:80}}/>
-              :<View style={{width:160,height:160,borderRadius:80,borderWidth:2,borderColor:'#3a9c79',backgroundColor:'#164638',alignItems:'center',justifyContent:'center'}}>
-                <Text style={{fontSize:55,fontWeight:'900',color:'#f5fff9'}}>{initials(displayName)}</Text>
-              </View>}
+      <View style={{alignItems:'center',justifyContent:'center',flex:1,paddingVertical:12}}>
+        <View style={{width:190,height:190,alignItems:'center',justifyContent:'center'}}>
+          <Animated.View style={{position:'absolute',width:164,height:164,borderRadius:82,borderWidth:2,borderColor:'#49d7a0',opacity:pulseOpacity,transform:[{scale:pulseScale}]}}/>
+          <View style={{width:148,height:148,borderRadius:74,borderWidth:2,backgroundColor:'#0b2a23',borderColor:'#286a55',alignItems:'center',justifyContent:'center',shadowColor:'#31c48d',shadowOpacity:0.28,shadowRadius:25,elevation:14,overflow:'hidden'}}>
+            {call?.contact_avatar_url||call?.avatar_url?<Image source={{uri:call.contact_avatar_url||call.avatar_url}} style={{width:138,height:138,borderRadius:69}}/>
+              :<View style={{width:138,height:138,borderRadius:69,borderWidth:2,borderColor:'#3a9c79',backgroundColor:'#164638',alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:49,fontWeight:'900',color:'#f5fff9'}}>{initials(displayName)}</Text></View>}
           </View>
         </View>
-        <Text numberOfLines={2} style={{fontSize:30,fontWeight:'900',color:'#fff',textAlign:'center',marginTop:30,letterSpacing:-0.6}}>{displayName}</Text>
-        <Text style={{fontSize:13,color:'#a8cfc0',marginTop:9,fontWeight:'700'}}>{isGroup?'Group conversation':isVideo?'Guftin video call':'Guftin voice call'}</Text>
-      <Text style={{fontSize:10,color:'#78bba0',marginTop:7,letterSpacing:1.2,fontWeight:'800'}}>END-TO-END ENCRYPTED</Text>
-        <View style={{marginTop:24,paddingHorizontal:17,paddingVertical:10,borderRadius:18,backgroundColor:'#10382d',borderWidth:1,borderColor:'#245c49',flexDirection:'row',alignItems:'center',gap:9}}>
+        <Text numberOfLines={2} style={{fontSize:28,fontWeight:'900',color:'#fff',textAlign:'center',marginTop:18,letterSpacing:-0.6}}>{displayName}</Text>
+        <Text style={{fontSize:13,color:'#a8cfc0',marginTop:8,fontWeight:'700'}}>{isGroup?'Group conversation':isVideo?'Guftin video call':'Guftin voice call'}</Text>
+        <Text style={{fontSize:10,color:'#78bba0',marginTop:7,letterSpacing:1.2,fontWeight:'800'}}>END-TO-END ENCRYPTED</Text>
+        <View style={{marginTop:18,paddingHorizontal:17,paddingVertical:10,borderRadius:18,backgroundColor:'#10382d',borderWidth:1,borderColor:'#245c49',flexDirection:'row',alignItems:'center',gap:9}}>
           <View style={{width:7,height:7,borderRadius:4,backgroundColor:busy?'#e8c46a':'#52dda2'}}/>
           <Text style={{fontSize:12,color:'#d9f3e7',fontWeight:'800'}}>{statusLabel}</Text>
         </View>
-        <Text style={{fontSize:11,color:'#789f90',marginTop:17,textAlign:'center',lineHeight:17}}>
-          {incoming?'Answer to connect, or decline this call.':'Waiting for the other person to answer.'}
-        </Text>
+        <Text style={{fontSize:11,color:'#789f90',marginTop:13,textAlign:'center',lineHeight:17}}>{incoming?'Answer to connect, or decline this call.':'Waiting for the other person to answer.'}</Text>
       </View>
-
-      {incoming
-        ? <View style={{flexDirection:'row',justifyContent:'space-around',alignItems:'center',paddingTop:12}}>
-            <View style={{alignItems:'center',gap:10}}>
-              <Btn disabled={busy} onPress={onDecline} style={{width:76,height:76,borderRadius:38,backgroundColor:'#d94350',alignItems:'center',justifyContent:'center',borderWidth:1,borderColor:'#fa7b83',opacity:busy?0.5:1}}>
-                <Text style={{fontSize:34,color:'#fff',fontWeight:'500'}}>×</Text>
-              </Btn>
-              <Text style={{fontSize:12,color:'#ffd9dc',fontWeight:'800'}}>Decline</Text>
-            </View>
-            <View style={{alignItems:'center',gap:10}}>
-              <Btn disabled={busy} onPress={onAccept} style={{width:82,height:82,borderRadius:41,backgroundColor:'#18a96f',alignItems:'center',justifyContent:'center',borderWidth:2,borderColor:'#82edbd',elevation:10,opacity:busy?0.5:1}}>
-                <Text style={{fontSize:31,color:'#fff'}}>{isVideo?'▣':'☎'}</Text>
-              </Btn>
-              <Text style={{fontSize:12,color:'#bff7d9',fontWeight:'900'}}>Answer</Text>
-            </View>
-          </View>
-        : <View style={{alignItems:'center',paddingTop:12}}>
-            <Btn onPress={onCancel} style={{width:76,height:76,borderRadius:38,backgroundColor:'#d94350',alignItems:'center',justifyContent:'center',borderWidth:1,borderColor:'#fa7b83'}}>
-              <Text style={{fontSize:34,color:'#fff',fontWeight:'500'}}>×</Text>
-            </Btn>
-            <Text style={{fontSize:12,color:'#ffd9dc',fontWeight:'800',marginTop:10}}>Cancel call</Text>
-          </View>}
+      {incoming?<View style={{flexDirection:'row',justifyContent:'space-around',alignItems:'center',paddingTop:10}}>
+        <View style={{alignItems:'center',gap:9}}>
+          <Btn disabled={busy} onPress={onDecline} style={{width:72,height:72,borderRadius:36,backgroundColor:'#d94350',alignItems:'center',justifyContent:'center',borderWidth:1,borderColor:'#fa7b83',opacity:busy?0.5:1}}><Text style={{fontSize:34,color:'#fff',fontWeight:'500'}}>×</Text></Btn>
+          <Text style={{fontSize:12,color:'#ffd9dc',fontWeight:'800'}}>Decline</Text>
+        </View>
+        <View style={{alignItems:'center',gap:9}}>
+          <Btn disabled={busy} onPress={onAccept} style={{width:78,height:78,borderRadius:39,backgroundColor:'#18a96f',alignItems:'center',justifyContent:'center',borderWidth:2,borderColor:'#82edbd',elevation:10,opacity:busy?0.5:1}}><Text style={{fontSize:31,color:'#fff'}}>{isVideo?'▣':'☎'}</Text></Btn>
+          <Text style={{fontSize:12,color:'#bff7d9',fontWeight:'900'}}>Answer</Text>
+        </View>
+      </View>:<View style={{alignItems:'center',paddingTop:10}}>
+        <Btn onPress={onCancel} style={{width:78,height:78,borderRadius:39,backgroundColor:'#d94350',alignItems:'center',justifyContent:'center',borderWidth:1,borderColor:'#fa7b83',elevation:7}}><Text style={{fontSize:34,color:'#fff',fontWeight:'500'}}>×</Text></Btn>
+        <Text style={{fontSize:12,color:'#ffd9dc',fontWeight:'800',marginTop:9}}>Cancel call</Text>
+      </View>}
     </View>
   </SafeAreaView>;
 }
 
-function SecureLiveKitRoom({liveCall,onDisconnected,onHangUp,onConnected}:any) {
+function SecureLiveKitRoom({liveCall,onDisconnected,onHangUp,onConnected,sessionUserId}:any) {
   // One group-call key is wrapped separately to every registered participant device.
   const {e2eeManager}=useRNE2EEManager({sharedKey:liveCall.e2eeKey});
   const [audioReady,setAudioReady]=useState(false);
@@ -622,7 +781,7 @@ function SecureLiveKitRoom({liveCall,onDisconnected,onHangUp,onConnected}:any) {
     }}
     onEncryptionError={(error:any)=>Alert.alert('Call encryption error',error?.message||'Media encryption could not be started.')}
   >
-    <CallRoomScreen callId={liveCall.id} callType={liveCall.callType} callScope={liveCall.callScope} onHangUp={onHangUp}/>
+    <CallRoomScreen callId={liveCall.id} callType={liveCall.callType} callScope={liveCall.callScope} sessionUserId={sessionUserId} onHangUp={onHangUp}/>
   </LiveKitRoom>;
 }
 function AudioBubble({uri}:{uri:string}) {
@@ -2429,6 +2588,11 @@ function GuftinApp() {
     // in-call button. Disconnect LiveKit before changing state or releasing
     // Android's communication audio focus.
     if(liveCall?.id===callId){
+      const recordingController=activeGuftinCallRecordingController;
+      if(recordingController?.callId===callId){
+        try{await recordingController.stopAndSave();}
+        catch(error:any){console.warn('Guftin recording stop before call end:',error?.message||error);}
+      }
       const roomController=activeGuftinCallRoom;
       if(roomController?.callId===callId&&!roomController.disconnected){
         try{await roomController.disconnect();}
@@ -3039,6 +3203,7 @@ function GuftinApp() {
   if(liveCall){
     return <SecureLiveKitRoom
       liveCall={liveCall}
+      sessionUserId={session.user.id}
       onConnected={()=>{
         if(Platform.OS==='android'&&liveCall.nativeIncomingCall){
           try{RNCallKeep.setCurrentCallActive(liveCall.id);}
@@ -3046,7 +3211,7 @@ function GuftinApp() {
         }
       }}
       onDisconnected={()=>void endCall(liveCall.id)}
-      onHangUp={()=>void endCall(liveCall.id)}
+      onHangUp={()=>endCall(liveCall.id)}
     />;
   }
 
