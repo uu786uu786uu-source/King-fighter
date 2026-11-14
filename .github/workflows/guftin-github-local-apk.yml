@@ -112,13 +112,13 @@ jobs:
             --local \
             --non-interactive \
             --freeze-credentials \
-            --output ./dist/Guftin-1.4.26-GitHub.apk
-          test -s ./dist/Guftin-1.4.26-GitHub.apk
+            --output ./dist/Guftin-1.4.27-GitHub.apk
+          test -s ./dist/Guftin-1.4.27-GitHub.apk
 
       - name: Verify APK package and cryptographic signature
         shell: bash
         run: |
-          APK="./dist/Guftin-1.4.26-GitHub.apk"
+          APK="./dist/Guftin-1.4.27-GitHub.apk"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$APK"
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | head -n 1
           sha256sum "$APK"
@@ -127,8 +127,8 @@ jobs:
       - name: Upload GitHub-built APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Guftin-1.4.26-GitHub-APK
-          path: apps/kingchat/dist/Guftin-1.4.26-GitHub.apk
+          name: Guftin-1.4.27-GitHub-APK
+          path: apps/kingchat/dist/Guftin-1.4.27-GitHub.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -139,11 +139,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APK="./dist/Guftin-1.4.26-GitHub.apk"
-          TAG="guftin-v1.4.26-android31"
+          APK="./dist/Guftin-1.4.27-GitHub.apk"
+          TAG="guftin-v1.4.27-android32"
           test -s "$APK"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" --clobber
           else
-            gh release create "$TAG" "$APK" --title "Guftin 1.4.26 — Android build 31" --notes "Signed Guftin Android APK with incoming-call ringtone. Source: fix/managed-android-call-ringing."
+            gh release create "$TAG" "$APK" --title "Guftin 1.4.27 — Android build 32" --notes "Signed Guftin Android APK with incoming-call ringtone. Source: fix/managed-android-call-ringing."
           fi
