@@ -915,6 +915,12 @@ function GuftinApp() {
   const [channelPublic,setChannelPublic]=useState(true);
   const [channelInviteCode,setChannelInviteCode]=useState('');
   const [channelBusy,setChannelBusy]=useState(false);
+  const [channelEditOpen,setChannelEditOpen]=useState(false);
+  const [channelEditTarget,setChannelEditTarget]=useState<any>(null);
+  const [channelEditTitle,setChannelEditTitle]=useState('');
+  const [channelEditDescription,setChannelEditDescription]=useState('');
+  const [channelLogoAsset,setChannelLogoAsset]=useState<any>(null);
+  const [channelEditBusy,setChannelEditBusy]=useState(false);
   const [chatDetailsOpen,setChatDetailsOpen]=useState(false);
   const [chatDetails,setChatDetails]=useState<any>(null);
   const [chatDetailsLoading,setChatDetailsLoading]=useState(false);
@@ -1154,7 +1160,7 @@ function GuftinApp() {
         supabase.from('kc_messages').select('id,conversation_id,sender_id,body,message_type,created_at,deleted_at')
           .in('conversation_id',ids).is('deleted_at',null).order('created_at',{ascending:false}).limit(500),
         supabase.from('kc_message_hidden').select('message_id').eq('user_id',session.user.id),
-        supabase.from('kc_channels').select('conversation_id,owner_id,title,description,invite_code,is_public,is_official,is_verified').in('conversation_id',ids),
+        supabase.from('kc_channels').select('conversation_id,owner_id,title,description,logo_path,invite_code,is_public,is_official,is_verified').in('conversation_id',ids),
         directConversationIds.length?supabase.from('kc_call_logs').select('conversation_id').in('conversation_id',directConversationIds):Promise.resolve({data:[],error:null})
       ]);
       if(memberResult.error) throw memberResult.error;
@@ -1181,7 +1187,7 @@ function GuftinApp() {
         if(conv.kind==='direct'&&(!peer||!peer.id))return null;
         const channel:any=channelMap.get(row.conversation_id);
         const name=conv.kind==='group'?(conv.title||'Group chat'):conv.kind==='channel'?(channel?.title||conv.title||'Channel'):(peer?.display_name||'Guftin member');
-        const avatarPath=conv.kind==='group'?(conv.photo_url||null):(peer?.avatar_url||null);
+        const avatarPath=conv.kind==='group'?(conv.photo_url||null):conv.kind==='channel'?(channel?.logo_path||null):(peer?.avatar_url||null);
         const avatarUrl=avatarPath?(await getSignedMediaUrl(avatarPath))||undefined:undefined;
         let last=latest.get(row.conversation_id);
         if(last&&hiddenMessageIds.current.has(last.id))last=undefined;
@@ -2084,7 +2090,7 @@ function GuftinApp() {
     if(!channel||!session)return;
     const title=channel.title||'Guftin channel';
     const chat:Chat={
-      id:channel.conversation_id,name:title,avatar:initials(title),color:colorFor(title),
+      id:channel.conversation_id,name:title,avatar:initials(title),avatarUrl:channel.logo_signed_url||undefined,color:colorFor(title),
       last:'Channel updates',time:'',unread:0,online:false,kind:'channel',lastAt:Date.now(),
       isOfficial:!!channel.is_official,isVerified:!!channel.is_verified,
       isChannelOwner:channel.owner_id===session.user.id,inviteCode:channel.invite_code,
@@ -2098,23 +2104,76 @@ function GuftinApp() {
     setChannelsLoading(true);
     try{
       const {data,error}=await supabase.from('kc_channels')
-        .select('conversation_id,owner_id,title,handle,description,invite_code,is_public,is_official,is_verified,created_at')
+        .select('conversation_id,owner_id,title,handle,description,logo_path,invite_code,is_public,is_official,is_verified,created_at')
         .order('created_at',{ascending:false}).limit(500);
       if(error)throw error;
       const rows=(data||[]) as any[];
+      const rowsWithLogos=await Promise.all(rows.map(async row=>({ ...row, logo_signed_url:row.logo_path?(await getSignedMediaUrl(row.logo_path))||undefined:undefined })));
       const ids=rows.map(row=>row.conversation_id);
       const {data:following,error:followingError}=ids.length
         ?await supabase.from('kc_channel_members').select('conversation_id,role').eq('user_id',session.user.id).in('conversation_id',ids)
         :{data:[],error:null};
       if(followingError)throw followingError;
       const membershipMap=new Map((following||[]).map((row:any)=>[row.conversation_id,row.role]));
-      setChannels(rows.map(row=>({...row,isFollowing:membershipMap.has(row.conversation_id),myRole:membershipMap.get(row.conversation_id)||null})));
+      setChannels(rowsWithLogos.map(row=>({...row,isFollowing:membershipMap.has(row.conversation_id),myRole:membershipMap.get(row.conversation_id)||null})));
     }catch(error:any){
       if(!isConnectivityFailure(error))Alert.alert('Channels could not load',error?.message||'Please refresh and try again.');
     }finally{setChannelsLoading(false);}
-  },[session]);
+  },[session,getSignedMediaUrl]);
 
   useEffect(()=>{if(session&&tab==='Channels')void loadChannels();},[session?.user?.id,tab,loadChannels]);
+
+  const openChannelEditor=(channel:any)=>{
+    const target=channel||channels.find(row=>row.conversation_id===active?.id)||active;
+    if(!target||target.owner_id!==session?.user?.id){Alert.alert('Owner access required','Only the channel owner can change its name, description or logo.');return;}
+    setChannelEditTarget({...target,logo_signed_url:target.logo_signed_url||target.avatarUrl});
+    setChannelEditTitle(target.title||target.name||'');
+    setChannelEditDescription(target.description||'');
+    setChannelLogoAsset(null);
+    setChannelEditOpen(true);
+  };
+
+  const chooseChannelLogo=async()=>{
+    const permission=await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if(!permission.granted){Alert.alert('Permission needed','Allow photo access to choose a channel logo.');return;}
+    const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:['images'],allowsEditing:true,aspect:[1,1],quality:0.88});
+    if(!result.canceled&&result.assets?.[0])setChannelLogoAsset(result.assets[0]);
+  };
+
+  const saveChannelBranding=async()=>{
+    const target=channelEditTarget,title=channelEditTitle.trim(),description=channelEditDescription.trim();
+    if(!session||!target||channelEditBusy)return;
+    if(target.owner_id!==session.user.id){Alert.alert('Owner access required','This account no longer owns the selected channel.');return;}
+    if(title.length<2||title.length>60){Alert.alert('Channel name not valid','Use a name between 2 and 60 characters.');return;}
+    if(description.length>500){Alert.alert('Description too long','Use 500 characters or fewer.');return;}
+    setChannelEditBusy(true);
+    let uploadedPath:string|null=null;
+    try{
+      if(channelLogoAsset){
+        const file=new File(channelLogoAsset.uri);
+        if(file.size>10*1024*1024)throw new Error('Channel logo must be under 10 MB.');
+        const bytes=new Uint8Array(await file.arrayBuffer());
+        uploadedPath=session.user.id+'/'+target.conversation_id+'/channel-logo/'+Date.now()+'_'+ExpoCrypto.randomUUID()+'.jpg';
+        const {error:uploadError}=await supabase.storage.from('chat-media').upload(uploadedPath,bytes,{contentType:'image/jpeg',upsert:false});
+        bytes.fill(0);
+        if(uploadError)throw uploadError;
+      }
+      const {data,error}=await supabase.rpc('kc_update_channel_branding',{p_conversation_id:target.conversation_id,p_title:title,p_description:description,p_logo_path:uploadedPath});
+      if(error)throw error;
+      const savedLogoPath=data?.logo_path||uploadedPath||target.logo_path||null;
+      const signedLogo=savedLogoPath?(await getSignedMediaUrl(savedLogoPath))||undefined:undefined;
+      const patch={title,description,logo_path:savedLogoPath,logo_signed_url:signedLogo,name:title,avatar:initials(title),avatarUrl:signedLogo,color:colorFor(title)};
+      setChannels(current=>current.map(row=>row.conversation_id===target.conversation_id?{...row,...patch}:row));
+      setChats(current=>current.map(chat=>chat.id===target.conversation_id?{...chat,...patch}:chat));
+      setActive(current=>current?.id===target.conversation_id?{...current,...patch}:current);
+      setChannelEditOpen(false);setChannelLogoAsset(null);
+      await Promise.all([loadChannels(),loadInbox()]);
+      Alert.alert('Channel updated','The channel name, description and logo are saved centrally. Followers will see the updated branding in Guftin.');
+    }catch(error:any){
+      if(uploadedPath)await supabase.storage.from('chat-media').remove([uploadedPath]);
+      Alert.alert('Channel not updated',error?.message||'Please try again.');
+    }finally{setChannelEditBusy(false);}
+  };
 
   const createChannel=async()=>{
     const title=channelTitle.trim();
@@ -2128,7 +2187,7 @@ function GuftinApp() {
       setChannelCreateOpen(false);setChannelTitle('');setChannelDescription('');setChannelPublic(true);
       await Promise.all([loadChannels(),loadInbox()]);
       const {data:created,error:channelError}=await supabase.from('kc_channels')
-        .select('conversation_id,owner_id,title,description,invite_code,is_public,is_official,is_verified')
+        .select('conversation_id,owner_id,title,description,logo_path,invite_code,is_public,is_official,is_verified')
         .eq('conversation_id',data).single();
       if(channelError)throw channelError;
       openChannelChat(created);
@@ -2146,7 +2205,7 @@ function GuftinApp() {
       if(error)throw error;
       await Promise.all([loadChannels(),loadInbox()]);
       const {data:channel,error:channelError}=await supabase.from('kc_channels')
-        .select('conversation_id,owner_id,title,description,invite_code,is_public,is_official,is_verified')
+        .select('conversation_id,owner_id,title,description,logo_path,invite_code,is_public,is_official,is_verified')
         .eq('conversation_id',data).single();
       if(channelError)throw channelError;
       openChannelChat(channel);
@@ -2179,17 +2238,20 @@ function GuftinApp() {
     if(!active||active.kind!=='channel')return;
     const channel=channels.find(row=>row.conversation_id===active.id)||active;
     const options:any[]=[];
-    if(active.isChannelOwner&&!active.isOfficial){
+    if(active.isChannelOwner){
+      options.push({text:'Edit channel name and logo',onPress:()=>openChannelEditor(channel)});
       options.push({text:'Share invite link',onPress:()=>void shareChannelInvite(channel)});
       options.push({text:'Share invite code',onPress:()=>void Share.share({message:channel.invite_code||active.inviteCode||''})});
-      options.push({text:'Delete channel',style:'destructive',onPress:()=>Alert.alert('Delete channel?', 'This removes the channel, its followers and posts for everyone.',[
-        {text:'Cancel',style:'cancel'},
-        {text:'Delete channel',style:'destructive',onPress:()=>void (async()=>{
-          const {error}=await supabase.rpc('kc_delete_channel',{p_conversation_id:active.id});
-          if(error){Alert.alert('Channel not deleted',error.message);return;}
-          setActive(null);await Promise.all([loadChannels(),loadInbox()]);
-        })()}
-      ])});
+      if(!active.isOfficial){
+        options.push({text:'Delete channel',style:'destructive',onPress:()=>Alert.alert('Delete channel?', 'This removes the channel, its followers and posts for everyone.',[
+          {text:'Cancel',style:'cancel'},
+          {text:'Delete channel',style:'destructive',onPress:()=>void (async()=>{
+            const {error}=await supabase.rpc('kc_delete_channel',{p_conversation_id:active.id});
+            if(error){Alert.alert('Channel not deleted',error.message);return;}
+            setActive(null);await Promise.all([loadChannels(),loadInbox()]);
+          })()}
+        ])});
+      }
     }else if(!active.isOfficial){
       options.push({text:'Leave channel',style:'destructive',onPress:()=>Alert.alert('Leave channel?', 'You will stop receiving this channel’s updates.',[
         {text:'Cancel',style:'cancel'},
@@ -3787,7 +3849,7 @@ function GuftinApp() {
         ?<Text style={{fontSize:12,color:C.muted,marginBottom:16}}>You have not created a channel yet.</Text>
         :channels.filter(channel=>channel.owner_id===session.user.id).map(channel=><View key={channel.conversation_id} style={{backgroundColor:C.white,borderRadius:17,padding:13,marginBottom:9,borderWidth:1,borderColor:C.line}}>
           <View style={{flexDirection:'row',alignItems:'center',gap:11}}>
-            <View style={{width:46,height:46,borderRadius:16,backgroundColor:C.mint,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:21,color:C.green}}>◈</Text></View>
+            <Avatar label={initials(channel.title||'C')} color={C.green} size={46} uri={channel.logo_signed_url}/>
             <View style={{flex:1}}><Text style={{fontSize:14,fontWeight:'900',color:C.ink}}>{channel.title||'My channel'}{channel.is_verified?<VerifiedBadge label="Verified channel"/>:null}</Text><Text style={{fontSize:10,color:C.muted,marginTop:3}}>{channel.is_public?'Public channel':'Private · invite link only'} · Owner</Text></View>
             <Btn onPress={()=>void shareChannelInvite(channel)} style={{padding:9,borderRadius:11,backgroundColor:C.mint}}><Text style={{fontSize:11,color:C.green,fontWeight:'900'}}>Invite ↗</Text></Btn>
           </View>
@@ -3798,8 +3860,8 @@ function GuftinApp() {
       {channels.filter(channel=>channel.owner_id!==session.user.id).length===0
         ?<Text style={{fontSize:12,color:C.muted}}>No public channels to discover yet. Share your own channel link to invite followers.</Text>
         :channels.filter(channel=>channel.owner_id!==session.user.id).map(channel=><View key={channel.conversation_id} style={{flexDirection:'row',alignItems:'center',gap:11,padding:12,borderBottomWidth:1,borderColor:C.line}}>
-          <View style={{width:44,height:44,borderRadius:15,backgroundColor:C.mint,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:20,color:C.green}}>◈</Text></View>
-          <View style={{flex:1}}><Text style={{fontSize:13,fontWeight:'900',color:C.ink}}>{channel.is_official?'Guftin Official':(channel.title||'Guftin channel')}{channel.is_verified?<VerifiedBadge label="Verified channel"/>:null}</Text><Text numberOfLines={2} style={{fontSize:10,color:C.muted,marginTop:3}}>{channel.description|| (channel.is_public?'Public channel':'Private channel')}</Text></View>
+          <Avatar label={initials(channel.title||'C')} color={C.green} size={44} uri={channel.logo_signed_url}/>
+          <View style={{flex:1}}><Text style={{fontSize:13,fontWeight:'900',color:C.ink}}>{channel.title||'Guftin channel'}{channel.is_verified?<VerifiedBadge label="Verified channel"/>:null}</Text><Text numberOfLines={2} style={{fontSize:10,color:C.muted,marginTop:3}}>{channel.description|| (channel.is_public?'Public channel':'Private channel')}</Text></View>
           {channel.isFollowing?<Btn onPress={()=>openChannelChat(channel)} style={{paddingHorizontal:13,paddingVertical:9,borderRadius:11,backgroundColor:C.mint}}><Text style={{color:C.green,fontWeight:'900',fontSize:11}}>Open</Text></Btn>
             :channel.is_public?<Btn disabled={channelBusy} onPress={()=>void followPublicChannel(channel)} style={{paddingHorizontal:13,paddingVertical:9,borderRadius:11,backgroundColor:C.green}}><Text style={{color:'#fff',fontWeight:'900',fontSize:11}}>Follow</Text></Btn>
             :<Btn onPress={()=>setChannelJoinOpen(true)} style={{paddingHorizontal:13,paddingVertical:9,borderRadius:11,backgroundColor:C.paper}}><Text style={{color:C.green,fontWeight:'900',fontSize:11}}>Invite only</Text></Btn>}
@@ -3932,6 +3994,27 @@ function GuftinApp() {
       </View>
     </Modal>
 
+
+    <Modal visible={channelEditOpen} transparent animationType="slide" onRequestClose={()=>setChannelEditOpen(false)}>
+      <View style={{flex:1,backgroundColor:'#0008',justifyContent:'flex-end'}}>
+        <View style={{backgroundColor:C.white,borderTopLeftRadius:24,borderTopRightRadius:24,padding:21}}>
+          <Text style={{fontSize:21,fontWeight:'900',color:C.ink}}>Edit channel branding</Text>
+          <Text style={{fontSize:12,color:C.muted,lineHeight:18,marginTop:5}}>Only the channel owner can make these changes. Followers will see the saved name and logo.</Text>
+          <Btn onPress={()=>void chooseChannelLogo()} style={{alignSelf:'center',alignItems:'center',marginTop:16,marginBottom:12}}>
+            <Avatar label={initials(channelEditTitle||'C')} color={C.green} size={84} uri={channelLogoAsset?.uri||channelEditTarget?.logo_signed_url}/>
+            <Text style={{fontSize:12,fontWeight:'900',color:C.green,marginTop:8}}>{channelLogoAsset?'Change selected logo':'Choose channel logo'}</Text>
+          </Btn>
+          <TextInput value={channelEditTitle} onChangeText={setChannelEditTitle} placeholder="Channel name" maxLength={60} style={{backgroundColor:C.paper,borderRadius:14,padding:14,marginTop:8,color:C.ink}}/>
+          <TextInput value={channelEditDescription} onChangeText={setChannelEditDescription} placeholder="Channel description" maxLength={500} multiline style={{backgroundColor:C.paper,borderRadius:14,padding:14,marginTop:10,minHeight:85,textAlignVertical:'top',color:C.ink}}/>
+          <View style={{flexDirection:'row',justifyContent:'flex-end',gap:10,marginTop:18}}>
+            <Btn disabled={channelEditBusy} onPress={()=>setChannelEditOpen(false)} style={{padding:13}}><Text style={{color:C.muted,fontWeight:'700'}}>Cancel</Text></Btn>
+            <Btn disabled={channelEditBusy} onPress={()=>void saveChannelBranding()} style={{backgroundColor:C.green,paddingHorizontal:18,paddingVertical:13,borderRadius:13}}>
+              {channelEditBusy?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'900'}}>Save changes</Text>}
+            </Btn>
+          </View>
+        </View>
+      </View>
+    </Modal>
 
     <Modal visible={channelCreateOpen} transparent animationType="slide" onRequestClose={()=>setChannelCreateOpen(false)}>
       <View style={{flex:1,backgroundColor:'#0008',justifyContent:'flex-end'}}>
