@@ -3590,12 +3590,7 @@ function GuftinApp() {
       <TextInput value={profileUsername} onChangeText={v=>setProfileUsername(v.toLowerCase().replace(/[^a-z0-9_]/g,''))} placeholder="Username (3-24 characters)" autoCapitalize="none" style={{backgroundColor:C.white,borderRadius:15,padding:16,marginBottom:10,color:C.ink}}/>
       <Text style={{fontSize:11,color:C.muted,marginBottom:14}}>Allowed: lowercase letters, numbers and underscore.</Text>
       <Btn disabled={savingProfile} onPress={finishProfile} style={{backgroundColor:C.green,padding:17,borderRadius:16,alignItems:'center'}}>{savingProfile?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'900'}}>Save and continue</Text>}</Btn>
-      <Btn onPress={()=>supabase.auth.signOut()} style={{padding:15,alignItems:'center'}}><Text style={{color:C.red,fontWeight:'700'}}<View style={{padding:15,backgroundColor:C.mint,borderRadius:14,marginTop:18}}>
-        <Text style={{fontWeight:'900',color:C.green}}>Contact Guftin Official</Text>
-        <Text style={{color:C.ink,fontSize:12,lineHeight:18,marginTop:6}}>For complaints, feedback, feature requests or any question about Guftin, contact our official team directly.</Text>
-        <Btn onPress={()=>void openGuftinSupport()} style={{backgroundColor:C.green,padding:13,borderRadius:12,alignItems:'center',marginTop:10}}><Text style={{color:'#fff',fontWeight:'900'}}>Email Guftin Official · guftinofficle@gmail.com</Text></Btn>
-      </View>
-      >Sign out</Text></Btn>
+      <Btn onPress={()=>supabase.auth.signOut()} style={{padding:15,alignItems:'center'}}><Text style={{color:C.red,fontWeight:'700'}}>Sign out</Text></Btn>
     </SafeAreaView>;
   }
 
@@ -3933,7 +3928,12 @@ function GuftinApp() {
         <Text style={{color:C.muted,fontSize:10,lineHeight:15,marginTop:6}}>This is an early encryption implementation with no forward secrecy or verified safety numbers, and private keys cannot be recovered after reinstalling Android. New direct voice/video calls now use LiveKit media E2EE with a per-call key wrapped to each registered device. Status updates are not encrypted, and neither messaging nor calling has had an independent security audit.</Text>
       </View>
       <Btn onPress={()=>Alert.alert('Privacy','New text messages and photo/video attachments are encrypted on the sending device before upload. New direct voice/video calls use LiveKit media E2EE with a per-call key wrapped to each registered device. Public keys are not yet verified with safety numbers, forward secrecy is not implemented, status is not end-to-end encrypted, and this version has not had an independent security audit.')} style={{padding:18,borderBottomWidth:1,borderColor:C.line,marginTop:12}}><Text style={{color:C.ink,fontWeight:'700'}}>Privacy and security　›</Text></Btn>
-      <Btn onPress={()=>supabase.auth.signOut()} style={{padding:18}}><Text style={{color:C.red,fontWeight:'800'}}>Sign out</Text></Btn>
+            <View style={{padding:15,backgroundColor:C.mint,borderRadius:14,marginTop:18}}>
+        <Text style={{fontWeight:'900',color:C.green}}>Contact Guftin Official</Text>
+        <Text style={{color:C.ink,fontSize:12,lineHeight:18,marginTop:6}}>For complaints, feedback, feature requests or any question about Guftin, contact our official team directly.</Text>
+        <Btn onPress={()=>void openGuftinSupport()} style={{backgroundColor:C.green,padding:13,borderRadius:12,alignItems:'center',marginTop:10}}><Text style={{color:'#fff',fontWeight:'900'}}>Email Guftin Official · guftinofficle@gmail.com</Text></Btn>
+      </View>
+<Btn onPress={()=>supabase.auth.signOut()} style={{padding:18}}><Text style={{color:C.red,fontWeight:'800'}}>Sign out</Text></Btn>
     </ScrollView>:null}
     {adsReady&&tab!=='You'?<View style={{alignItems:'center',justifyContent:'center',backgroundColor:C.white,minHeight:50,paddingTop:4}}>
       <BannerAd
