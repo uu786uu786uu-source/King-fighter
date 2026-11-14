@@ -2280,6 +2280,25 @@ function GuftinApp() {
   },[session?.user?.id,handleChannelDeepLink]);
 
   useEffect(()=>{
+    if(!session)return;
+    const realtime=supabase.channel('guftin-channel-brand-sync-'+session.user.id)
+      .on('postgres_changes',{event:'UPDATE',schema:'public',table:'kc_channels'},payload=>{
+        const row:any=payload.new;
+        if(!row?.conversation_id)return;
+        void (async()=>{
+          const signedLogo=row.logo_path?(await getSignedMediaUrl(row.logo_path))||undefined:undefined;
+          const name=row.title||'Guftin channel';
+          const patch={name,avatar:initials(name),avatarUrl:signedLogo,color:colorFor(name),description:row.description||'',logo_path:row.logo_path||null,logo_signed_url:signedLogo};
+          setChannels(current=>current.map(item=>item.conversation_id===row.conversation_id?{...item,...row,...patch}:item));
+          setChats(current=>current.map(chat=>chat.id===row.conversation_id?{...chat,...patch}:chat));
+          setActive(current=>current?.id===row.conversation_id?{...current,...patch}:current);
+        })();
+      })
+      .subscribe();
+    return ()=>{void supabase.removeChannel(realtime);};
+  },[session?.user?.id,getSignedMediaUrl]);
+
+  useEffect(()=>{
     if(!session||tab!=='Channels')return;
     void loadChannels();
     const realtime=supabase.channel('guftin-channels-'+session.user.id)
