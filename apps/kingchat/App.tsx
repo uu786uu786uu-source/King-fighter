@@ -3,7 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import {
   ActivityIndicator, Alert, Animated, AppState, BackHandler, FlatList, Image, KeyboardAvoidingView, Modal,
-  Platform, RefreshControl, ScrollView, StatusBar, Switch, Text, TextInput, ToastAndroid,
+  Platform, RefreshControl, ScrollView, Share, StatusBar, Switch, Text, TextInput, ToastAndroid,
   TouchableOpacity, View, useWindowDimensions
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -252,7 +252,7 @@ const THEMES:any = {
   sunset:{ink:'#472b2b',muted:'#987c73',green:'#d45b42',mint:'#ffede4',paper:'#fff7f2',white:'#fff',line:'#f3e4dc',red:'#b63f4b'},
   night:{ink:'#edf3ff',muted:'#9baac0',green:'#77b9ff',mint:'#223d5d',paper:'#101a2b',white:'#1a2940',line:'#2a3b54',red:'#ff8894'}
 };
-type Chat = { id:string; name:string; avatar:string; avatarUrl?:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number };
+type Chat = { id:string; name:string; avatar:string; avatarUrl?:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number; isOfficial?:boolean; isVerified?:boolean; isChannelOwner?:boolean; inviteCode?:string; isPublic?:boolean; ownerId?:string; description?:string };
 type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; attachment_url?:string|null; created_at:string; mine:boolean; deleted_at?:string|null; pending?:boolean };
 const AUTH_REDIRECT_URL = 'kingchat://auth/callback';
 const palette = ['#d49a91','#8796c7','#81ad98','#bd8aa8','#c4a47c','#9a91bd'];
@@ -899,6 +899,15 @@ function GuftinApp() {
   const [selectedGroupIds,setSelectedGroupIds]=useState<string[]>([]);
   const [groupContactsLoading,setGroupContactsLoading]=useState(false);
   const [groupCreating,setGroupCreating]=useState(false);
+  const [channels,setChannels]=useState<any[]>([]);
+  const [channelsLoading,setChannelsLoading]=useState(false);
+  const [channelCreateOpen,setChannelCreateOpen]=useState(false);
+  const [channelJoinOpen,setChannelJoinOpen]=useState(false);
+  const [channelTitle,setChannelTitle]=useState('');
+  const [channelDescription,setChannelDescription]=useState('');
+  const [channelPublic,setChannelPublic]=useState(true);
+  const [channelInviteCode,setChannelInviteCode]=useState('');
+  const [channelBusy,setChannelBusy]=useState(false);
   const [chatDetailsOpen,setChatDetailsOpen]=useState(false);
   const [chatDetails,setChatDetails]=useState<any>(null);
   const [chatDetailsLoading,setChatDetailsLoading]=useState(false);
@@ -1123,16 +1132,19 @@ function GuftinApp() {
       const rows=(memberships||[]) as any[];
       const ids=rows.map(r=>r.conversation_id).filter(Boolean);
       if(ids.length===0){setChats([]);void AsyncStorage.setItem(inboxCacheKey,'[]').catch(()=>{});return;}
-      const [memberResult,profileResult,messageResult,hiddenResult]=await Promise.all([
+      const [memberResult,profileResult,messageResult,hiddenResult,channelResult]=await Promise.all([
         supabase.from('kc_conversation_members').select('conversation_id,user_id,last_read_at,joined_at').in('conversation_id',ids),
         supabase.from('kc_profiles').select('id,display_name,avatar_url,is_online').neq('id',session.user.id),
         supabase.from('kc_messages').select('id,conversation_id,sender_id,body,message_type,created_at,deleted_at')
           .in('conversation_id',ids).is('deleted_at',null).order('created_at',{ascending:false}).limit(500),
-        supabase.from('kc_message_hidden').select('message_id').eq('user_id',session.user.id)
+        supabase.from('kc_message_hidden').select('message_id').eq('user_id',session.user.id),
+        supabase.from('kc_channels').select('conversation_id,owner_id,title,description,invite_code,is_public,is_official,is_verified').in('conversation_id',ids)
       ]);
       if(memberResult.error) throw memberResult.error;
       if(messageResult.error) throw messageResult.error;
+      if(channelResult.error) throw channelResult.error;
       const members=(memberResult.data||[]) as any[];
+      const channelMap=new Map((channelResult.data||[]).map((channel:any)=>[channel.conversation_id,channel]));
       const hiddenIds=new Set((hiddenResult.data||[]).map((row:any)=>row.message_id));
       hiddenIds.forEach(id=>hiddenMessageIds.current.add(id));
       const inboxMessages=((messageResult.data||[]) as any[]).filter(message=>!hiddenIds.has(message.id)&&!hiddenMessageIds.current.has(message.id));
@@ -1145,7 +1157,8 @@ function GuftinApp() {
         const conv=row.conversation||{};
         const peers=members.filter(m=>m.conversation_id===row.conversation_id&&m.user_id!==session.user.id);
         const peer=peers.length?profileMap.get(peers[0].user_id):null;
-        const name=conv.kind==='group'?(conv.title||'Group chat'):(peer?.display_name||'Guftin member');
+        const channel:any=channelMap.get(row.conversation_id);
+        const name=conv.kind==='group'?(conv.title||'Group chat'):conv.kind==='channel'?(channel?.title||conv.title||'Channel'):(peer?.display_name||'Guftin member');
         const avatarPath=conv.kind==='group'?(conv.photo_url||null):(peer?.avatar_url||null);
         const avatarUrl=avatarPath?(await getSignedMediaUrl(avatarPath))||undefined:undefined;
         let last=latest.get(row.conversation_id);
@@ -1173,7 +1186,9 @@ function GuftinApp() {
         }
         return {id:row.conversation_id,name,avatar:initials(name),avatarUrl,color:colorFor(name),last:preview,
           time:last?timeLabel(last.created_at):'',unread,online:!!peer?.is_online,kind:conv.kind||'direct',
-          lastAt:last?new Date(last.created_at).getTime():new Date(conv.updated_at||row.joined_at).getTime()};
+          lastAt:last?new Date(last.created_at).getTime():new Date(conv.updated_at||row.joined_at).getTime(),
+          isOfficial:!!channel?.is_official,isVerified:!!channel?.is_verified,isChannelOwner:channel?.owner_id===session.user.id,
+          inviteCode:channel?.invite_code,isPublic:channel?.is_public!==false,ownerId:channel?.owner_id,description:channel?.description||''};
       }))).sort((a,b)=>b.lastAt-a.lastAt);
       setChats(mapped);
       void AsyncStorage.setItem(inboxCacheKey,JSON.stringify(mapped)).catch(()=>{});
@@ -1224,6 +1239,7 @@ function GuftinApp() {
   useEffect(()=>{
     if(session&&tab==='Calls')void loadCallHistory();
   },[session?.user?.id,tab,loadCallHistory]);
+  useEffect(()=>{if(session&&tab==='Channels')void loadChannels();},[session?.user?.id,tab,loadChannels]);
 
   const resolveMessage=useCallback(async(raw:any,cached?:Message):Promise<Message>=>{
     let attachment_url=raw.attachment_url||null;
@@ -1428,9 +1444,9 @@ function GuftinApp() {
     }finally{setPermissionSetupBusy(false);}
   };
 
-  const dispatchPush=async(kind:'message'|'call'|'status'|'status_like'|'status_view',id:string)=>{
+  const dispatchPush=async(kind:'message'|'official_broadcast'|'call'|'status'|'status_like'|'status_view',id:string)=>{
     try{
-      const payload=kind==='message'?{kind,message_id:id}:kind==='call'?{kind,call_id:id}:{kind,status_id:id};
+      const payload=kind==='message'||kind==='official_broadcast'?{kind,message_id:id}:kind==='call'?{kind,call_id:id}:{kind,status_id:id};
       const {data,error}=await supabase.functions.invoke('guftin-push',{body:payload});
       if(error)console.warn('Push dispatch:',error.message);
       else if(kind==='call'&&(!data?.sent||data.sent<1))console.warn('Incoming call push was not queued:',data?.reason||data?.warnings||'No push ticket was accepted.');
@@ -2013,6 +2029,151 @@ function GuftinApp() {
       .eq('conversation_id',chat.id).eq('user_id',session.user.id);
   };
 
+  const openChannelChat=(channel:any)=>{
+    if(!channel||!session)return;
+    const title=channel.title||'Guftin channel';
+    const chat:Chat={
+      id:channel.conversation_id,name:title,avatar:initials(title),color:colorFor(title),
+      last:'Channel updates',time:'',unread:0,online:false,kind:'channel',lastAt:Date.now(),
+      isOfficial:!!channel.is_official,isVerified:!!channel.is_verified,
+      isChannelOwner:channel.owner_id===session.user.id,inviteCode:channel.invite_code,
+      isPublic:channel.is_public!==false,ownerId:channel.owner_id,description:channel.description||''
+    };
+    void openChat(chat);
+  };
+
+  const loadChannels=useCallback(async()=>{
+    if(!session)return;
+    setChannelsLoading(true);
+    try{
+      const {data,error}=await supabase.from('kc_channels')
+        .select('conversation_id,owner_id,title,handle,description,invite_code,is_public,is_official,is_verified,created_at')
+        .order('created_at',{ascending:false}).limit(500);
+      if(error)throw error;
+      const rows=(data||[]) as any[];
+      const ids=rows.map(row=>row.conversation_id);
+      const {data:following,error:followingError}=ids.length
+        ?await supabase.from('kc_channel_members').select('conversation_id,role').eq('user_id',session.user.id).in('conversation_id',ids)
+        :{data:[],error:null};
+      if(followingError)throw followingError;
+      const membershipMap=new Map((following||[]).map((row:any)=>[row.conversation_id,row.role]));
+      setChannels(rows.map(row=>({...row,isFollowing:membershipMap.has(row.conversation_id),myRole:membershipMap.get(row.conversation_id)||null})));
+    }catch(error:any){
+      if(!isConnectivityFailure(error))Alert.alert('Channels could not load',error?.message||'Please refresh and try again.');
+    }finally{setChannelsLoading(false);}
+  },[session]);
+
+  const createChannel=async()=>{
+    const title=channelTitle.trim();
+    if(!title||channelBusy)return;
+    setChannelBusy(true);
+    try{
+      const {data,error}=await supabase.rpc('kc_create_channel',{
+        p_title:title,p_description:channelDescription.trim(),p_is_public:channelPublic
+      });
+      if(error)throw error;
+      setChannelCreateOpen(false);setChannelTitle('');setChannelDescription('');setChannelPublic(true);
+      await Promise.all([loadChannels(),loadInbox()]);
+      const {data:created,error:channelError}=await supabase.from('kc_channels')
+        .select('conversation_id,owner_id,title,description,invite_code,is_public,is_official,is_verified')
+        .eq('conversation_id',data).single();
+      if(channelError)throw channelError;
+      openChannelChat(created);
+      Alert.alert('Channel created','Your channel is ready. Share its invite link so people can follow it.');
+    }catch(error:any){Alert.alert('Channel not created',error?.message||'Please try again.');}
+    finally{setChannelBusy(false);}
+  };
+
+  const joinChannelByInvite=useCallback(async(code:string,showMessage=true)=>{
+    const invite=code.trim();
+    if(!invite||!session||channelBusy)return;
+    setChannelBusy(true);
+    try{
+      const {data,error}=await supabase.rpc('kc_join_channel',{p_channel_id:null,p_invite_code:invite});
+      if(error)throw error;
+      await Promise.all([loadChannels(),loadInbox()]);
+      const {data:channel,error:channelError}=await supabase.from('kc_channels')
+        .select('conversation_id,owner_id,title,description,invite_code,is_public,is_official,is_verified')
+        .eq('conversation_id',data).single();
+      if(channelError)throw channelError;
+      openChannelChat(channel);
+      setChannelJoinOpen(false);setChannelInviteCode('');
+      if(showMessage)Alert.alert('Channel followed','You are now following '+(channel.title||'this channel')+'.');
+    }catch(error:any){Alert.alert('Could not join channel',error?.message||'Check the invite link or code.');}
+    finally{setChannelBusy(false);}
+  },[session,channelBusy,loadChannels,loadInbox]);
+
+  const followPublicChannel=async(channel:any)=>{
+    if(!channel?.conversation_id||channelBusy)return;
+    setChannelBusy(true);
+    try{
+      const {error}=await supabase.rpc('kc_join_channel',{p_channel_id:channel.conversation_id,p_invite_code:null});
+      if(error)throw error;
+      await Promise.all([loadChannels(),loadInbox()]);
+      Alert.alert('Following channel','You are now following '+(channel.title||'this channel')+'.');
+    }catch(error:any){Alert.alert('Could not follow channel',error?.message||'Please try again.');}
+    finally{setChannelBusy(false);}
+  };
+
+  const shareChannelInvite=async(channel:any)=>{
+    if(!channel?.invite_code)return;
+    const link=Linking.createURL('channel/'+channel.invite_code);
+    try{await Share.share({message:'Follow '+(channel.title||'this Guftin channel')+' on Guftin:\n'+link});}
+    catch(error:any){Alert.alert('Could not share invite',error?.message||'Invite code: '+channel.invite_code);}
+  };
+
+  const showChannelOptions=()=>{
+    if(!active||active.kind!=='channel')return;
+    const channel=channels.find(row=>row.conversation_id===active.id)||active;
+    const options:any[]=[];
+    if(active.isChannelOwner&&!active.isOfficial){
+      options.push({text:'Share invite link',onPress:()=>void shareChannelInvite(channel)});
+      options.push({text:'Share invite code',onPress:()=>void Share.share({message:channel.invite_code||active.inviteCode||''})});
+      options.push({text:'Delete channel',style:'destructive',onPress:()=>Alert.alert('Delete channel?', 'This removes the channel, its followers and posts for everyone.',[
+        {text:'Cancel',style:'cancel'},
+        {text:'Delete channel',style:'destructive',onPress:()=>void (async()=>{
+          const {error}=await supabase.rpc('kc_delete_channel',{p_conversation_id:active.id});
+          if(error){Alert.alert('Channel not deleted',error.message);return;}
+          setActive(null);await Promise.all([loadChannels(),loadInbox()]);
+        })()}
+      ])});
+    }else if(!active.isOfficial){
+      options.push({text:'Leave channel',style:'destructive',onPress:()=>Alert.alert('Leave channel?', 'You will stop receiving this channel’s updates.',[
+        {text:'Cancel',style:'cancel'},
+        {text:'Leave channel',style:'destructive',onPress:()=>void (async()=>{
+          const {error}=await supabase.rpc('kc_leave_channel',{p_conversation_id:active.id});
+          if(error){Alert.alert('Could not leave channel',error.message);return;}
+          setActive(null);await Promise.all([loadChannels(),loadInbox()]);
+        })()}
+      ])});
+    }
+    options.push({text:'Close',style:'cancel'});
+    Alert.alert(active.isOfficial?'Guftin Official':'Channel options',active.description||'Channel updates are read-only for followers.',options);
+  };
+
+  const handleChannelDeepLink=useCallback(async(url:string)=>{
+    const match=url.match(/channel[/:]([a-f0-9]{16,64})/i);
+    if(match?.[1])await joinChannelByInvite(match[1],false);
+  },[joinChannelByInvite]);
+
+  useEffect(()=>{
+    if(!session)return;
+    let mounted=true;
+    void Linking.getInitialURL().then(url=>{if(mounted&&url)void handleChannelDeepLink(url);}).catch(()=>{});
+    const subscription=Linking.addEventListener('url',event=>void handleChannelDeepLink(event.url));
+    return ()=>{mounted=false;subscription.remove();};
+  },[session?.user?.id,handleChannelDeepLink]);
+
+  useEffect(()=>{
+    if(!session||tab!=='Channels')return;
+    void loadChannels();
+    const realtime=supabase.channel('guftin-channels-'+session.user.id)
+      .on('postgres_changes',{event:'*',schema:'public',table:'kc_channels'},()=>void loadChannels())
+      .on('postgres_changes',{event:'*',schema:'public',table:'kc_channel_members'},()=>void loadChannels())
+      .subscribe();
+    return ()=>{void supabase.removeChannel(realtime);};
+  },[session?.user?.id,tab,loadChannels]);
+
   useEffect(()=>{
     if(!pendingNotificationConversation)return;
     const chat=chats.find(item=>item.id===pendingNotificationConversation);
@@ -2050,6 +2211,22 @@ function GuftinApp() {
   const sendMessage=async()=>{
     const body=draft.trim();
     if(!body||!active||!session||sending||clearingConversationIds.current.has(active.id))return;
+    if(active.kind==='channel'){
+      if(!active.isChannelOwner){Alert.alert('Channel is read-only','Only the channel owner can publish updates.');return;}
+      setSending(true);
+      try{
+        const {data,error}=await supabase.from('kc_messages').insert({conversation_id:active.id,sender_id:session.user.id,body,message_type:'text'})
+          .select('id,conversation_id,sender_id,body,message_type,created_at').single();
+        if(error)throw error;
+        const item:Message={...data,mine:true};
+        setMessages(prev=>({...prev,[active.id]:[...(prev[active.id]||[]),item]}));
+        setDraft('');
+        setChats(prev=>prev.map(chat=>chat.id===active.id?{...chat,last:body,time:timeLabel(data.created_at),lastAt:Date.now()}:chat));
+        void dispatchPush(active.isOfficial?'official_broadcast':'message',data.id);
+      }catch(error:any){Alert.alert('Channel update not sent',error?.message||'Please try again.');}
+      finally{setSending(false);}
+      return;
+    }
     // Text can be stored locally before the encryption roster is online.
     // The background sender waits for the device key and network before delivery.
     const conversationId=active.id;
@@ -2497,7 +2674,40 @@ function GuftinApp() {
     }
   };
 
+  const sendChannelMedia=async()=>{
+    if(!active||active.kind!=='channel'||!active.isChannelOwner||!session||mediaPreparing)return;
+    try{
+      const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:['images','videos'],allowsEditing:false,quality:0.9,videoMaxDuration:60});
+      if(result.canceled||!result.assets?.length)return;
+      const asset=result.assets[0];
+      const messageType=asset.type==='video'?'video':'image';
+      const contentType=asset.mimeType||(messageType==='video'?'video/mp4':'image/jpeg');
+      if(!['image/jpeg','image/png','image/webp','video/mp4'].includes(contentType))throw new Error('Choose a JPG, PNG, WEBP image or MP4 video.');
+      const source=new File(asset.uri);
+      if(source.size>MAX_MEDIA_BYTES)throw new Error('Channel media is limited to 45 MB per photo or video.');
+      setMediaPreparing(true);
+      const bytes=new Uint8Array(await source.arrayBuffer());
+      const extension=messageType==='video'?'mp4':contentType==='image/png'?'png':contentType==='image/webp'?'webp':'jpg';
+      const objectPath=session.user.id+'/'+active.id+'/'+Date.now()+'_'+ExpoCrypto.randomUUID()+'.'+extension;
+      const {error:uploadError}=await supabase.storage.from('chat-media').upload(objectPath,bytes,{contentType,upsert:false});
+      bytes.fill(0);
+      if(uploadError)throw uploadError;
+      const {data,error}=await supabase.from('kc_messages').insert({conversation_id:active.id,sender_id:session.user.id,body:asset.fileName||(messageType==='video'?'Video':'Photo'),message_type:messageType,attachment_url:objectPath})
+        .select('id,conversation_id,sender_id,body,message_type,attachment_url,created_at').single();
+      if(error){await supabase.storage.from('chat-media').remove([objectPath]);throw error;}
+      const item=await resolveMessage({...data,mine:true});
+      setMessages(prev=>({...prev,[active.id]:[...(prev[active.id]||[]),item]}));
+      setChats(prev=>prev.map(chat=>chat.id===active.id?{...chat,last:messageType==='video'?'Video':'Photo',time:timeLabel(data.created_at),lastAt:Date.now()}:chat));
+      void dispatchPush(active.isOfficial?'official_broadcast':'message',data.id);
+    }catch(error:any){Alert.alert('Channel media not posted',error?.message||'Please try again.');}
+    finally{setMediaPreparing(false);}
+  };
+
   const sendMedia=()=>{
+    if(active?.kind==='channel'){
+      if(!active.isChannelOwner){Alert.alert('Channel is read-only','Only the channel owner can publish media.');return;}
+      void sendChannelMedia();return;
+    }
     Alert.alert('Attach to chat','Choose what you want to share.',[
       {text:'Photo or video',onPress:()=>void sendPhotosVideos()},
       {text:'PDF or document',onPress:()=>void sendDocument()},
@@ -3101,7 +3311,7 @@ function GuftinApp() {
   },[session,tab,loadStatuses]);
 
   const visible=useMemo(()=>chats.filter(c=>c.name.toLowerCase().includes(search.toLowerCase())),[chats,search]);
-  const pageTitle=tab==='Chats'?'Messages':tab==='Updates'?'Updates':tab==='Calls'?'Calls':'You';
+  const pageTitle=tab==='Chats'?'Messages':tab==='Updates'?'Updates':tab==='Channels'?'Channels':tab==='Calls'?'Calls':'You';
 
   if(authRestoring){
     return <SafeAreaView style={{flex:1,backgroundColor:C.paper,alignItems:'center',justifyContent:'center'}}>
@@ -3355,6 +3565,8 @@ function GuftinApp() {
         {tab==='Chats'?<Btn onPress={()=>void openGroupCreator()} style={{backgroundColor:C.mint,width:42,height:42,borderRadius:15,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:18,color:C.green}}>👥</Text></Btn>:null}
         {tab==='Chats'?<Btn onPress={()=>setSearching(!searching)} style={{backgroundColor:C.paper,width:42,height:42,borderRadius:15,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:19}}>⌕</Text></Btn>:null}
         {tab==='Chats'?<Btn onPress={()=>setAddOpen(true)} style={{backgroundColor:C.green,width:42,height:42,borderRadius:15,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:24,color:'#fff'}}>＋</Text></Btn>:null}
+        {tab==='Channels'?<Btn onPress={()=>setChannelJoinOpen(true)} style={{backgroundColor:C.mint,width:42,height:42,borderRadius:15,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:18,color:C.green}}>↗</Text></Btn>:null}
+        {tab==='Channels'?<Btn onPress={()=>setChannelCreateOpen(true)} style={{backgroundColor:C.green,width:42,height:42,borderRadius:15,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:24,color:'#fff'}}>＋</Text></Btn>:null}
       </View>
     </View>
     {tab==='Chats'?<>
@@ -3402,6 +3614,40 @@ function GuftinApp() {
           </Btn>}
         </View>
       </View>)}
+    </ScrollView>:null}
+    {tab==='Channels'?<ScrollView contentContainerStyle={{padding:18,paddingBottom:30}}>
+      <View style={{backgroundColor:C.paper,borderRadius:20,padding:18,marginBottom:16}}>
+        <Text style={{fontSize:19,fontWeight:'900',color:C.ink}}>Guftin Channels</Text>
+        <Text style={{fontSize:12,color:C.muted,lineHeight:18,marginTop:6}}>Create a broadcast channel, invite people with a link, and publish photos, videos or updates. Followers can view posts but cannot publish.</Text>
+        <View style={{flexDirection:'row',gap:9,marginTop:14}}>
+          <Btn onPress={()=>setChannelCreateOpen(true)} style={{flex:1,backgroundColor:C.green,padding:13,borderRadius:13,alignItems:'center'}}><Text style={{color:'#fff',fontWeight:'900'}}>＋ Create channel</Text></Btn>
+          <Btn onPress={()=>setChannelJoinOpen(true)} style={{flex:1,backgroundColor:C.mint,padding:13,borderRadius:13,alignItems:'center'}}><Text style={{color:C.green,fontWeight:'900'}}>Join by link</Text></Btn>
+        </View>
+      </View>
+      {channelsLoading&&channels.length===0?<View style={{padding:30,alignItems:'center'}}><ActivityIndicator color={C.green}/><Text style={{color:C.muted,marginTop:8}}>Loading channels…</Text></View>:null}
+      <Text style={{fontSize:16,fontWeight:'900',color:C.ink,marginBottom:9}}>Your channels</Text>
+      {channels.filter(channel=>channel.owner_id===session.user.id).length===0
+        ?<Text style={{fontSize:12,color:C.muted,marginBottom:16}}>You have not created a channel yet.</Text>
+        :channels.filter(channel=>channel.owner_id===session.user.id).map(channel=><View key={channel.conversation_id} style={{backgroundColor:C.white,borderRadius:17,padding:13,marginBottom:9,borderWidth:1,borderColor:C.line}}>
+          <View style={{flexDirection:'row',alignItems:'center',gap:11}}>
+            <View style={{width:46,height:46,borderRadius:16,backgroundColor:C.mint,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:21,color:C.green}}>◈</Text></View>
+            <View style={{flex:1}}><Text style={{fontSize:14,fontWeight:'900',color:C.ink}}>{channel.title||'My channel'}{channel.is_verified?<Text style={{color:'#2387e8'}}> ●✓</Text>:null}</Text><Text style={{fontSize:10,color:C.muted,marginTop:3}}>{channel.is_public?'Public channel':'Private · invite link only'} · Owner</Text></View>
+            <Btn onPress={()=>void shareChannelInvite(channel)} style={{padding:9,borderRadius:11,backgroundColor:C.mint}}><Text style={{fontSize:11,color:C.green,fontWeight:'900'}}>Invite ↗</Text></Btn>
+          </View>
+          <Text numberOfLines={2} style={{fontSize:11,color:C.muted,lineHeight:16,marginTop:8}}>{channel.description||'No channel description'}</Text>
+          <Btn onPress={()=>openChannelChat(channel)} style={{marginTop:10,backgroundColor:C.paper,padding:10,borderRadius:11,alignItems:'center'}}><Text style={{fontSize:11,color:C.green,fontWeight:'900'}}>Open channel ›</Text></Btn>
+        </View>)}
+      <Text style={{fontSize:16,fontWeight:'900',color:C.ink,marginTop:13,marginBottom:9}}>Followed and discover</Text>
+      {channels.filter(channel=>channel.owner_id!==session.user.id).length===0
+        ?<Text style={{fontSize:12,color:C.muted}}>No public channels to discover yet. Share your own channel link to invite followers.</Text>
+        :channels.filter(channel=>channel.owner_id!==session.user.id).map(channel=><View key={channel.conversation_id} style={{flexDirection:'row',alignItems:'center',gap:11,padding:12,borderBottomWidth:1,borderColor:C.line}}>
+          <View style={{width:44,height:44,borderRadius:15,backgroundColor:C.mint,alignItems:'center',justifyContent:'center'}}><Text style={{fontSize:20,color:C.green}}>◈</Text></View>
+          <View style={{flex:1}}><Text style={{fontSize:13,fontWeight:'900',color:C.ink}}>{channel.is_official?'Guftin Official':(channel.title||'Guftin channel')}{channel.is_verified?<Text style={{color:'#2387e8'}}> ●✓</Text>:null}</Text><Text numberOfLines={2} style={{fontSize:10,color:C.muted,marginTop:3}}>{channel.description|| (channel.is_public?'Public channel':'Private channel')}</Text></View>
+          {channel.isFollowing?<Btn onPress={()=>openChannelChat(channel)} style={{paddingHorizontal:13,paddingVertical:9,borderRadius:11,backgroundColor:C.mint}}><Text style={{color:C.green,fontWeight:'900',fontSize:11}}>Open</Text></Btn>
+            :channel.is_public?<Btn disabled={channelBusy} onPress={()=>void followPublicChannel(channel)} style={{paddingHorizontal:13,paddingVertical:9,borderRadius:11,backgroundColor:C.green}}><Text style={{color:'#fff',fontWeight:'900',fontSize:11}}>Follow</Text></Btn>
+            :<Btn onPress={()=>setChannelJoinOpen(true)} style={{paddingHorizontal:13,paddingVertical:9,borderRadius:11,backgroundColor:C.paper}}><Text style={{color:C.green,fontWeight:'900',fontSize:11}}>Invite only</Text></Btn>}
+        </View>)}
+      <Text style={{fontSize:10,color:C.muted,lineHeight:16,marginTop:18}}>Channel posts are broadcast content. They are visible to followers and are not end-to-end encrypted like private one-to-one messages.</Text>
     </ScrollView>:null}
     {tab==='Calls'?<ScrollView contentContainerStyle={{padding:18,paddingBottom:30}}>
       <View style={{backgroundColor:C.paper,borderRadius:18,padding:16,marginBottom:16}}>
@@ -3453,7 +3699,7 @@ function GuftinApp() {
       />
     </View>:null}
     <View style={{height:66+insets.bottom,paddingTop:5,paddingBottom:Math.max(insets.bottom,6),borderTopWidth:1,borderColor:C.line,flexDirection:'row',alignItems:'center',justifyContent:'space-around',backgroundColor:C.white,elevation:8}}>
-      {([['Chats','▤'],['Updates','◉'],['Calls','⌕'],['You','●']] as string[][]).map(([t,icon])=><Btn key={t} onPress={()=>setTab(t)} style={{alignItems:'center',minWidth:64}}><Text style={{fontSize:19,color:tab===t?C.green:C.muted}}>{icon}</Text><Text style={{fontSize:10,fontWeight:tab===t?'900':'600',color:tab===t?C.green:C.muted,marginTop:3}}>{t}</Text></Btn>)}
+      {([['Chats','▤'],['Updates','◉'],['Channels','◈'],['Calls','⌕'],['You','●']] as string[][].map(([t,icon])=><Btn key={t} onPress={()=>setTab(t)} style={{alignItems:'center',minWidth:58}}><Text style={{fontSize:19,color:tab===t?C.green:C.muted}}>{icon}</Text><Text style={{fontSize:10,fontWeight:tab===t?'900':'600',color:tab===t?C.green:C.muted,marginTop:3}}>{t}</Text></Btn>)}
     </View>
 
     <Modal visible={groupCreateOpen} transparent animationType="slide" onRequestClose={()=>setGroupCreateOpen(false)}>
@@ -3529,6 +3775,38 @@ function GuftinApp() {
       </View>
     </Modal>
 
+
+    <Modal visible={channelCreateOpen} transparent animationType="slide" onRequestClose={()=>setChannelCreateOpen(false)}>
+      <View style={{flex:1,backgroundColor:'#0008',justifyContent:'flex-end'}}>
+        <View style={{backgroundColor:C.white,borderTopLeftRadius:24,borderTopRightRadius:24,padding:21}}>
+          <Text style={{fontSize:21,fontWeight:'900',color:C.ink}}>Create a channel</Text>
+          <Text style={{fontSize:12,color:C.muted,marginTop:5}}>Create multiple channels and invite followers with a shareable link.</Text>
+          <TextInput value={channelTitle} onChangeText={setChannelTitle} placeholder="Channel name" maxLength={60} style={{backgroundColor:C.paper,borderRadius:14,padding:14,marginTop:15,color:C.ink}}/>
+          <TextInput value={channelDescription} onChangeText={setChannelDescription} placeholder="Description (optional)" maxLength={500} multiline style={{backgroundColor:C.paper,borderRadius:14,padding:14,marginTop:10,minHeight:75,textAlignVertical:'top',color:C.ink}}/>
+          <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',marginTop:14}}>
+            <View style={{flex:1,paddingRight:12}}><Text style={{fontWeight:'900',color:C.ink}}>Public channel</Text><Text style={{fontSize:11,color:C.muted,marginTop:3}}>Anyone can discover and follow it</Text></View>
+            <Switch value={channelPublic} onValueChange={setChannelPublic} trackColor={{true:C.green}}/>
+          </View>
+          <View style={{flexDirection:'row',justifyContent:'flex-end',gap:10,marginTop:20}}>
+            <Btn onPress={()=>setChannelCreateOpen(false)} style={{padding:13}}><Text style={{color:C.muted,fontWeight:'700'}}>Cancel</Text></Btn>
+            <Btn disabled={channelBusy||channelTitle.trim().length<2} onPress={()=>void createChannel()} style={{backgroundColor:C.green,paddingHorizontal:18,paddingVertical:13,borderRadius:13}}>{channelBusy?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'900'}}>Create channel</Text>}</Btn>
+          </View>
+        </View>
+      </View>
+    </Modal>
+    <Modal visible={channelJoinOpen} transparent animationType="fade" onRequestClose={()=>setChannelJoinOpen(false)}>
+      <View style={{flex:1,backgroundColor:'#0008',justifyContent:'center',padding:22}}>
+        <View style={{backgroundColor:C.white,borderRadius:22,padding:22}}>
+          <Text style={{fontSize:20,fontWeight:'900',color:C.ink}}>Join a channel</Text>
+          <Text style={{fontSize:12,color:C.muted,lineHeight:18,marginTop:7,marginBottom:14}}>Paste a Guftin channel invite code. Opening an invite link in Guftin will also join it.</Text>
+          <TextInput value={channelInviteCode} onChangeText={setChannelInviteCode} autoCapitalize="none" placeholder="Invite code" style={{backgroundColor:C.paper,borderRadius:14,padding:15,color:C.ink}}/>
+          <View style={{flexDirection:'row',justifyContent:'flex-end',gap:10,marginTop:18}}>
+            <Btn onPress={()=>setChannelJoinOpen(false)} style={{padding:13}}><Text style={{color:C.muted,fontWeight:'700'}}>Cancel</Text></Btn>
+            <Btn disabled={channelBusy||!channelInviteCode.trim()} onPress={()=>void joinChannelByInvite(channelInviteCode)} style={{backgroundColor:C.green,paddingHorizontal:18,paddingVertical:13,borderRadius:13}}>{channelBusy?<ActivityIndicator color="#fff"/>:<Text style={{color:'#fff',fontWeight:'900'}}>Join channel</Text>}</Btn>
+          </View>
+        </View>
+      </View>
+    </Modal>
     <Modal visible={addOpen} transparent animationType="fade" onRequestClose={()=>setAddOpen(false)}>
       <View style={{flex:1,backgroundColor:'#0008',justifyContent:'center',padding:22}}>
         <View style={{backgroundColor:C.white,borderRadius:22,padding:22}}>
