@@ -616,7 +616,7 @@ function SecureLiveKitRoom({liveCall,onDisconnected,onHangUp,onConnected}:any) {
     onConnected={onConnected}
     onDisconnected={async()=>{
       const roomController=activeGuftinCallRoom;
-      if(roomController?.callId===liveCall.id)roomController.disconnected=true;
+      if(roomController && roomController.callId===liveCall.id){roomController.disconnected=true;}
       await stopGuftinCallAudioSession();
       await onDisconnected?.();
     }}
