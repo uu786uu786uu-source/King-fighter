@@ -1244,7 +1244,6 @@ function GuftinApp() {
   useEffect(()=>{
     if(session&&tab==='Calls')void loadCallHistory();
   },[session?.user?.id,tab,loadCallHistory]);
-  useEffect(()=>{if(session&&tab==='Channels')void loadChannels();},[session?.user?.id,tab,loadChannels]);
 
   const resolveMessage=useCallback(async(raw:any,cached?:Message):Promise<Message>=>{
     let attachment_url=raw.attachment_url||null;
@@ -2071,6 +2070,8 @@ function GuftinApp() {
       if(!isConnectivityFailure(error))Alert.alert('Channels could not load',error?.message||'Please refresh and try again.');
     }finally{setChannelsLoading(false);}
   },[session]);
+
+  useEffect(()=>{if(session&&tab==='Channels')void loadChannels();},[session?.user?.id,tab,loadChannels]);
 
   const createChannel=async()=>{
     const title=channelTitle.trim();
