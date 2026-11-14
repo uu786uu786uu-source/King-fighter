@@ -72,8 +72,9 @@ const presentNativeIncomingCall = async (payload:any) => {
   const callType = payload?.call_type === 'video' ? 'video' : 'voice';
   const isGroupCall = payload?.call_scope === 'group';
 
-  // Register the call as self-managed: Android Telecom tracks call lifecycle,
-  // but Guftin owns the incoming/outgoing interface instead of the Phone app.
+  // Register the incoming call with Android Telecom managed mode.
+  // Android owns the system call screen and native ringtone; Guftin handles
+  // the secure LiveKit media session after the user answers.
   try {
     await ensureCallKeepReady();
     await RNCallKeep.displayIncomingCall(
@@ -84,7 +85,7 @@ const presentNativeIncomingCall = async (payload:any) => {
       callType === 'video'
     );
   } catch (error:any) {
-    console.warn('Guftin self-managed call registration failed:', error?.message || error);
+    console.warn('Guftin Android Telecom incoming-call registration failed:', error?.message || error);
   }
 
   // Android Telecom managed mode supplies the full incoming-call UI and
