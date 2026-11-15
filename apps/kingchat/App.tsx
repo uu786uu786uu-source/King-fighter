@@ -184,7 +184,7 @@ const THEMES:any = {
 type Chat = { id:string; name:string; avatar:string; avatarUrl?:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number };
 type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; attachment_url?:string|null; created_at:string; mine:boolean; deleted_at?:string|null; pending?:boolean };
 const AUTH_REDIRECT_URL = 'kingchat://auth/callback';
-const PRIVACY_POLICY_URL = 'https://github.com/uu786uu786uu-source/King-fighter/blob/kingchat/production-demo/apps/kingchat/PRIVACY_POLICY.md';
+const PRIVACY_POLICY_URL = 'https://oyjemlbsmffvofefgxvd.supabase.co/functions/v1/guftin-privacy-policy';
 const palette = ['#d49a91','#8796c7','#81ad98','#bd8aa8','#c4a47c','#9a91bd'];
 // Supabase chat-media is currently configured for 50 MB per object. Keep encrypted
 // uploads below that ceiling because authenticated encryption adds a small overhead.
