@@ -6,6 +6,7 @@ on:
       - kingchat/production-demo
     paths:
       - ".github/workflows/guftin-production-eas.yml"
+      - "apps/kingchat/**"
   workflow_dispatch:
     inputs:
       git_ref:
