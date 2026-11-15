@@ -34,7 +34,7 @@ module.exports = ({ config }) => ({
   },
   name: "Guftin",
   slug: "guftin",
-  version: "1.4.25",
+  version: "1.4.26",
   orientation: "portrait",
   userInterfaceStyle: "light",
   // Keep the app deep-link scheme for Guftin links and email auth callbacks.
@@ -43,7 +43,7 @@ module.exports = ({ config }) => ({
   android: {
     ...config.android,
     package: "com.guftin.app",
-    versionCode: 30,
+    versionCode: 31,
     // Google Mobile Ads 16.0.3 requires the New Architecture; CallKeep overloads are patched during CI install.
     newArchEnabled: true,
     // Add the Firebase Android client config when the owner supplies it.
@@ -80,7 +80,7 @@ module.exports = ({ config }) => ({
   ios: {
     ...config.ios,
     bundleIdentifier: "com.guftin.app",
-    buildNumber: "15",
+    buildNumber: "16",
     icon: "./assets/guftin-icon.png",
     supportsTablet: true,
     infoPlist: {
