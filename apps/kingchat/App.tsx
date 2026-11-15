@@ -184,6 +184,7 @@ const THEMES:any = {
 type Chat = { id:string; name:string; avatar:string; avatarUrl?:string; color:string; last:string; time:string; unread:number; online:boolean; kind:string; lastAt:number };
 type Message = { id:string; conversation_id:string; sender_id:string|null; body:string|null; message_type:string; attachment_url?:string|null; created_at:string; mine:boolean; deleted_at?:string|null; pending?:boolean };
 const AUTH_REDIRECT_URL = 'kingchat://auth/callback';
+const PRIVACY_POLICY_URL = 'https://github.com/uu786uu786uu-source/King-fighter/blob/kingchat/production-demo/apps/kingchat/PRIVACY_POLICY.md';
 const palette = ['#d49a91','#8796c7','#81ad98','#bd8aa8','#c4a47c','#9a91bd'];
 // Supabase chat-media is currently configured for 50 MB per object. Keep encrypted
 // uploads below that ceiling because authenticated encryption adds a small overhead.
@@ -3018,6 +3019,9 @@ function GuftinApp() {
         <Text style={{color:C.muted,fontSize:12,marginTop:5,marginBottom:15}}>Privacy and connection preferences</Text>
         <Btn onPress={()=>{setSettingsOpen(false);setPermissionSetupStep(0);setPermissionSetupAutoSave(mediaAutoDownload);setPermissionSetupNotice('');setPermissionSetupVisible(true);}} style={{backgroundColor:C.mint,padding:12,borderRadius:13,marginBottom:7}}>
           <Text style={{color:C.green,fontWeight:'900',textAlign:'center'}}>Review app permissions</Text>
+        </Btn>
+        <Btn onPress={()=>{setSettingsOpen(false);void WebBrowser.openBrowserAsync(PRIVACY_POLICY_URL).catch((error:any)=>Alert.alert('Privacy Policy could not open',error?.message||'Please try again.'));}} style={{padding:13,borderBottomWidth:1,borderColor:C.line,marginBottom:6}}>
+          <Text style={{color:C.ink,fontWeight:'800',textAlign:'center'}}>Privacy Policy　›</Text>
         </Btn>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Show online status</Text><Text style={{color:C.muted,fontSize:11}}>Let contacts see when you are online</Text></View><Switch value={onlineVisibility} onValueChange={setOnlineVisibility} trackColor={{true:C.green}}/></View>
         <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingVertical:12}}><View style={{flex:1,paddingRight:12}}><Text style={{color:C.ink,fontWeight:'800'}}>Read receipts</Text><Text style={{color:C.muted,fontSize:11}}>Show seen status on messages</Text></View><Switch value={showReadReceipts} onValueChange={setShowReadReceipts} trackColor={{true:C.green}}/></View>
