@@ -2,14 +2,14 @@
   "expo": {
     "name": "Guftin",
     "slug": "guftin-",
-    "version": "1.5.5",
+    "version": "1.5.6",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "scheme": "kingchat",
     "android": {
       "package": "com.guftin.app",
       "newArchEnabled": true,
-      "versionCode": 41,
+      "versionCode": 42,
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "./assets/guftin-icon.png",
@@ -25,7 +25,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.guftin.app",
-      "buildNumber": "16",
+      "buildNumber": "17",
       "icon": "./assets/guftin-icon.png",
       "infoPlist": {
         "NSCameraUsageDescription": "Guftin uses the camera for photos and video calls.",
