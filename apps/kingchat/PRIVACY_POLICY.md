@@ -2,109 +2,90 @@
 
 **Effective date: 15 November 2026**
 
-This Privacy Policy explains how the Guftin mobile application ("Guftin", "we", "us" or "our") collects, uses, stores and shares information when you create an account or use its messaging, media, status, notification and voice/video calling features.
-
-Guftin is operated by the Guftin app owner. This policy describes the current application implementation and may be updated when the app or its service providers change.
+This Privacy Policy explains how Guftin ("Guftin", "we", "us" or "our") processes information when you use the Guftin mobile application and related services. It describes the current app implementation and the providers configured to operate it.
 
 ## 1. Information we process
 
 Depending on the features you use, Guftin may process:
 
-- **Account and sign-in information:** your email address, authentication records and account identifiers. Email/password sign-in is supported. Google sign-in may also be available when the required Google and Supabase configuration is enabled. When you use Google sign-in, Google provides the account information authorised in the sign-in flow, such as your name, email address and account identifier.
-- **Profile information:** your Guftin username, display name, profile photo and optional "about" text.
-- **Contacts and conversations:** usernames you search for or add, saved Guftin contact relationships, direct and group conversation membership, group details and related activity.
-- **Messages and shared content:** message text, message type, timestamps, delivery/read receipts, reactions, and photos, videos, voice messages or supported documents that you choose to send. Content and metadata needed to deliver and display those features are processed by Guftin's backend.
-- **Status information:** status text, photos or videos you choose to post, along with timestamps, expiry information, views and reactions. Status posts are designed to expire from normal viewing after 24 hours.
-- **Calling information:** call participants, voice/video call type, call state and timing, room/session information and technical signalling needed to establish and operate calls. LiveKit is used for supported real-time calling.
-- **Device and notification information:** push-notification tokens and device registration information needed to route notifications to your device, plus permission choices you make in Android or iOS.
-- **Advertising information:** Guftin includes Google Mobile Ads (AdMob) integration. Ad requests in the app are configured as non-personalised. Google may still process device, ad-delivery, fraud-prevention and diagnostic information under its own terms and privacy policies.
+- **Account and sign-in information:** email address, account identifier and authentication records. Google sign-in may be available where enabled and configured; Google provides the account information you approve in its sign-in flow.
+- **Profile information:** Guftin username, display name, profile photo and optional About text.
+- **Contacts and conversations:** usernames you search for or add, saved in-app Guftin contact relationships, direct/group conversation membership, group roles and channel membership.
+- **Messages and shared content:** message text, type, timestamps, replies, reactions, delivery/read information and files you choose to share, such as photos, videos, voice messages and supported documents.
+- **Status and channel information:** status text/media, captions, views, likes, channel titles/handles/descriptions, membership and content you choose to publish. Public channel content may be visible to its audience. Status posts are designed to expire from normal app viewing after 24 hours.
+- **Call information:** caller and participant identifiers, voice/video call type, call state, timing, room/session information and technical signaling needed to connect calls.
+- **Device and notification information:** push-notification token, platform/device registration details and permission choices needed to route notifications and operate the app.
+- **Advertising information:** Guftin integrates Google Mobile Ads (AdMob). The app requests non-personalised ads; Google may still process device, ad-delivery, fraud-prevention and diagnostic information under its own terms and privacy policies.
 
-Guftin's contact discovery is based on usernames that you enter in the app and contacts you choose to add. The current app is not designed to upload or synchronise your phone's address book. The current app does not request device location permission for GPS/location tracking.
+Guftin contact discovery is based on usernames you enter and contacts you choose to add. The current Android app does not request permission to upload or synchronise your phone address book, and it does not request precise device-location permission.
 
-## 2. Permissions and your choices
+## 2. Device permissions
 
-Guftin requests access only when a feature needs it. Depending on the features you use and the operating system, this may include:
+Depending on your chosen features and operating system, Guftin may request:
+- **Camera** for taking photos or video-call features.
+- **Microphone** for voice messages and voice/video calls.
+- **Photos/media access** when you select or save media.
+- **Notifications** for message, status and incoming-call alerts.
 
-- **Camera:** to take photos or use video-call features.
-- **Microphone:** to record voice messages and make or receive voice/video calls.
-- **Photos and media:** to choose a profile photo, select media to share, or save media to your gallery.
-- **Notifications:** to send message, status and incoming-call notifications.
-
-You can deny or later change these permissions in your device settings. Some features will not work without the relevant permission. Gallery access is needed only when you choose media, save media, or enable the app's auto-save option.
-
-The Settings area also provides controls for options such as online-status visibility, read receipts, push notifications, automatic message sync and automatic saving of incoming photos/videos.
+You can deny or change permissions in your device settings. Some features will not work without the relevant permission. Guftin does not continuously access your camera or microphone; access is needed when you use the related feature.
 
 ## 3. How we use information
 
-We use information to:
+We use information to create and secure accounts, display profiles, find Guftin users by username, maintain contact and group membership, deliver messages and media, operate channels and statuses, connect calls, send notifications you enable, remember app preferences, prevent abuse, maintain service reliability, display non-personalised ads and respond to privacy or support requests.
 
-- create, authenticate and maintain your account;
-- display your profile and help you find Guftin users by username;
-- create direct and group conversations and deliver messages and media;
-- operate status posts, views, reactions and expiry;
-- establish and manage voice/video calls;
-- deliver push notifications and call alerts;
-- remember the preferences you select in the app;
-- protect accounts, enforce access controls, prevent abuse and maintain service reliability; and
-- display non-personalised advertisements where the AdMob integration is enabled.
+## 4. Service providers
 
-We do not use the contents of your private messages to create advertising profiles.
+Guftin relies on the following providers:
+- **Supabase** for authentication, database, real-time updates, private media storage and backend functions. The configured Supabase project is in the ap-northeast-1 (Japan) region. See [Supabase Privacy](https://supabase.com/privacy).
+- **LiveKit** for supported real-time voice/video calling and media transport. See [LiveKit Privacy](https://livekit.com/legal/privacy-policy).
+- **Expo and platform push services, including Firebase Cloud Messaging where used,** to deliver notifications to supported devices.
+- **Google** for Google sign-in where enabled and Google Mobile Ads (AdMob) for non-personalised ads. See [Google Privacy](https://policies.google.com/privacy) and [Google Ads information](https://policies.google.com/technologies/ads).
+- **Cloudflare** may deliver Guftin's public website and related web pages.
 
-## 4. Service providers and processing
+These providers process information needed to supply their services, under their respective terms and privacy notices. Providers may process information in countries where their infrastructure is located.
 
-Guftin relies on third-party services to provide its features. The current app source integrates:
+## 5. Encryption and security limits
 
-- **Supabase:** authentication, database records, real-time updates, private media storage and backend functions.
-- **LiveKit:** real-time voice/video call sessions and media transport.
-- **Expo notification services and Google Firebase Cloud Messaging (FCM):** push-notification delivery to supported devices.
-- **Google sign-in services:** only when Google sign-in is enabled and configured and you choose to use it.
-- **Google Mobile Ads (AdMob):** delivery and operation of non-personalised ads where enabled.
+Guftin uses authenticated sessions, access controls and private cloud storage for supported media. The current app encrypts new text messages and photo/video attachments on the sending device before upload. Supported direct voice/video calls use LiveKit media end-to-end encryption with per-call keys distributed to registered devices.
 
-These providers process the information necessary to perform their services. Their handling of data is also governed by their own terms, security practices and privacy policies. Information may be processed in the countries where these providers operate their infrastructure. Guftin does not represent that all information is stored in one country or one data centre.
+This protection does **not** mean that every type of information or feature is end-to-end encrypted. Profile information, contact relationships, group/channel membership, status posts and status media, push tokens, call signaling and service metadata are not all end-to-end encrypted. The current encryption implementation does not provide forward secrecy or user-verifiable safety numbers and has not undergone an independent cryptographic security audit. Device private keys are stored locally; uninstalling or resetting the app may make them unavailable. No online service can guarantee absolute security.
 
-## 5. Storage, encryption and security limits
+## 6. Calls and call recording
 
-Guftin uses Supabase cloud services for account, database, real-time and storage functionality. The chat-media storage bucket is configured as private; the app uses access-controlled and time-limited access to retrieve stored media.
+Guftin processes call participants, call type, call status and session information to establish and operate voice/video calls. Ordinary calls are not automatically recorded. If a call-recording option is offered and a participant requests a recording, recording must not start unless every participant accepts. Recording consent and status may be processed, and an approved recording is stored as an MP4 file in private cloud storage. Recording changes the call's encryption state while it is active; do not assume a recorded call remains end-to-end encrypted. Declining a recording request prevents that recording from starting.
 
-The current app implements device-side encryption for supported direct-message text and shared message media, and media end-to-end encryption for supported direct voice/video calls using per-call keys distributed to registered devices. This protection does **not** mean that every category of information is end-to-end encrypted. In particular, profile information, contact relationships, group/status information, status media, push tokens, call signalling and service metadata are not all end-to-end encrypted.
+## 7. Sharing and disclosure
 
-The current encryption implementation does not provide forward secrecy or a user-verifiable safety-number process and has not undergone an independent cryptographic security audit. Device encryption keys are stored on the device; uninstalling or resetting the app may make the private key unavailable and may prevent that device from decrypting previously encrypted content. No internet service or security measure can guarantee absolute security.
+Information may be available to the recipients or audience you choose: direct-message participants, members of a group, or viewers/followers of a public channel. We do not sell personal information for money. We may provide information to the service providers described above, respond to valid legal requests, or disclose information where reasonably necessary to protect users, the app or legal rights.
 
-Please keep your password and any verification codes private, and install app updates from sources you trust.
+Push message notifications are designed to use generic alerts rather than message text or attachment contents. Incoming-call alerts may include call-related details, such as the caller's display name or call type, so the recipient can identify the call.
 
-## 6. Sharing and disclosure
+## 8. Storage, retention and deletion
 
-We do not sell your personal information. We may share or make information available:
+Information is kept for as long as needed to provide the Service, maintain account and conversation features, protect security, resolve disputes and meet legal obligations. Supported chat media is kept in private storage. Status posts are designed to expire from normal app viewing after 24 hours; this does not guarantee that every stored file, backup or technical record is erased at that exact time. Retention periods can differ by information type and provider.
 
-- to the service providers listed above, only as needed to operate the app;
-- to people in a conversation or to the audience you select when you send a message or post a status;
-- when required by applicable law, legal process or a valid government request; or
-- when reasonably necessary to protect users, the app, its security or legal rights.
+The current app does not provide a complete self-service account-and-data deletion workflow. To request account closure or deletion of personal information, email **guftinofficle@gmail.com** from the email address associated with your Guftin account, using the subject **Guftin Account and Data Deletion**. We may ask for reasonable information to verify account ownership. Some information may need to be retained for legal, security or operational reasons. Deletion from your account does not remove copies already saved or captured by other participants, nor guarantee immediate removal from provider backups or logs.
 
-Push notifications for messages are designed to use generic alerts rather than include the message text or attachment contents. Incoming-call alerts may include call-related information such as the caller's display name and call type so that the recipient can identify the call.
+## 9. Your choices and privacy requests
 
-## 7. Retention and deletion requests
+You choose what profile information and content to provide, whom to add, and which groups or channels to join. You can manage camera, microphone, media and notification permissions through your device settings. You may contact us to request access to, correction of or deletion of information associated with your account, subject to applicable law and reasonable identity verification.
 
-We keep information for as long as it is needed to operate the service, maintain account and conversation features, protect security, resolve disputes or meet legal obligations. Retention may differ by information type and by the service provider involved.
+## 10. Children's privacy
 
-Status posts are designed to expire from normal app viewing after 24 hours. This expiry should not be understood as a guarantee that every technical copy, backup or provider-side record is immediately erased at that exact time.
+Guftin is not directed to children under 13, and we do not knowingly seek to collect personal information from children under 13. If you believe a child has provided personal information to Guftin, contact us so we can review the request.
 
-The current app does not provide a complete self-service account-and-data deletion workflow. To request account closure or deletion of personal information, email **guftinofficle@gmail.com** from the email address associated with your Guftin account. We may ask for reasonable information to verify that you control the account. We will review the request and explain any information that must be retained for security, legal or operational reasons.
+## 11. International processing
 
-Deleting information from your account does not necessarily remove copies already received, saved or captured by other conversation participants, nor does it guarantee immediate removal from service-provider backups or logs.
+The configured Supabase project region is ap-northeast-1 (Japan). Google, LiveKit, Expo, platform push providers and other service providers may process information in other countries according to their infrastructure and terms. Data protection laws may differ between countries.
 
-## 8. Children's privacy
+## 12. Changes to this policy
 
-Guftin is not directed to children under 13, and we do not knowingly seek to collect personal information from children under 13. If you believe a child has provided personal information to Guftin, contact us at **guftinofficle@gmail.com** so that we can review the request.
+We may update this Privacy Policy when the app, its providers or data practices change. The effective date at the top of this page will be updated when a revision is published.
 
-## 9. Changes to this policy
+## 13. Contact
 
-We may update this Privacy Policy when the app's features, data practices or service providers change. The updated policy will be published at this same address with a revised effective date. Continued use of Guftin after an update means that you have had the opportunity to review the revised policy.
+For privacy questions, access/correction requests, account deletion or other concerns, contact:
 
-## 10. Contact
+**Guftin Privacy Support:** [guftinofficle@gmail.com](mailto:guftinofficle@gmail.com)
 
-For privacy questions, data-access requests or account/data deletion requests, contact:
-
-**Guftin Support:** guftinofficle@gmail.com
-
-Please do not send passwords, one-time codes, private messages, identity documents or other sensitive information in an initial email.
+Please do not send passwords, one-time codes, private messages or identity documents in an initial email.
