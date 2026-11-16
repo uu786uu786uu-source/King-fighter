@@ -6,7 +6,7 @@ on:
       git_ref:
         description: Branch or commit to build
         required: true
-        default: kingchat/production-demo
+        default: release/guftin-v1.5.4-otp-channel-admin
         type: string
 
 permissions:
@@ -26,6 +26,21 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22.23.3'
+
+      - name: Verify restored Guftin release source
+        working-directory: apps/kingchat
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const pkg = require('./package.json');
+          const appConfig = fs.readFileSync('app.config.js', 'utf8');
+          if (pkg.version !== '1.5.6' || !/version:\\s*"1\\.5\\.6"/.test(appConfig) || !/versionCode:\\s*42/.test(appConfig)) {
+            console.error('Refusing to build: expected the full Guftin 1.5.6 / Android code 42 source.');
+            process.exit(1);
+          }
+          console.log('Verified Guftin 1.5.6 / Android code 42 source.');
+          NODE
 
       - name: Verify Expo owner token is available
         shell: bash
