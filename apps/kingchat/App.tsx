@@ -3210,7 +3210,7 @@ function GuftinApp() {
     const cleanName=fullName.trim();
     if(cleanName.length<2||cleanName.length>40){setAuthError('Enter your display name (2-40 characters).');return;}
     if(!/^[a-z0-9_]{3,24}$/.test(cleanUsername)){setAuthError('Username must be 3-24 characters using letters, numbers or underscore.');return;}
-    if(!/^\\S+@\\S+\\.\\S+$/.test(cleanEmail)){setAuthError('Enter a valid email address.');return;}
+    if(!/^\S+@\S+\.\S+$/.test(cleanEmail)){setAuthError('Enter a valid email address.');return;}
     if(password.length<8){setAuthError('Password must be at least 8 characters.');return;}
     setAuthBusy(true);
     setAuthError('');
